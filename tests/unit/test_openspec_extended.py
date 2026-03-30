@@ -16,12 +16,12 @@ bin_path = Path(__file__).parent.parent.parent / "bin"
 sys.path.insert(0, str(bin_path))
 
 osx_module = ModuleType("openspec_extended")
-osx_module.__file__ = str(bin_path / "openspec-extended.py")
+osx_module.__file__ = str(bin_path / "openspec-extended")
 
-with open(bin_path / "openspec-extended.py", "r") as f:
+with open(bin_path / "openspec-extended", "r") as f:
     code = f.read()
 
-exec(compile(code, bin_path / "openspec-extended.py", "exec"), osx_module.__dict__)
+exec(compile(code, bin_path / "openspec-extended", "exec"), osx_module.__dict__)
 oe = osx_module
 
 runner = CliRunner()

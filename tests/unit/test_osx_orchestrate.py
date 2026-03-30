@@ -15,11 +15,11 @@ scripts_path = Path(__file__).parent.parent.parent / "resources/opencode/scripts
 sys.path.insert(0, str(scripts_path))
 
 osx_orchestrate_module = ModuleType("osx_orchestrate")
-osx_orchestrate_module.__file__ = str(scripts_path / "osx-orchestrate.py")
+osx_orchestrate_module.__file__ = str(scripts_path / "osx-orchestrate")
 
-osx_code = (scripts_path / "osx-orchestrate.py").read_text()
+osx_code = (scripts_path / "osx-orchestrate").read_text()
 exec(
-    compile(osx_code, scripts_path / "osx-orchestrate.py", "exec"),
+    compile(osx_code, scripts_path / "osx-orchestrate", "exec"),
     osx_orchestrate_module.__dict__,
 )
 
