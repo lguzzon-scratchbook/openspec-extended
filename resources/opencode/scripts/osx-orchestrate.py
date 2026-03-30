@@ -1,0 +1,1153 @@
+#!/usr/bin/env python3
+"""
+OpenSpec Extended Autonomous Workflow Orchestrator
+Version is read from manifest.json at runtime
+Usage: osx-orchestrate.py <change-name> [options]
+"""
+
+import json
+import os
+import re
+import signal
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import typer
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+MANIFEST_PATH = SCRIPT_DIR.parent.parent / "manifest.json"
+
+DEFAULT_TIMEOUT = 1800
+DEFAULT_MAX_PHASE_ITERATIONS = 10
+
+PHASES = ["PHASE0", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "PHASE5", "PHASE6"]
+
+PHASE_NAMES = {
+    "PHASE0": "ARTIFACT REVIEW",
+    "PHASE1": "IMPLEMENTATION",
+    "PHASE2": "REVIEW",
+    "PHASE3": "MAINTAIN DOCS",
+    "PHASE4": "SYNC",
+    "PHASE5": "SELF-REFLECTION",
+    "PHASE6": "ARCHIVE",
+}
+
+PHASE_COMMANDS = {
+    "PHASE0": "osx-phase0",
+    "PHASE1": "osx-phase1",
+    "PHASE2": "osx-phase2",
+    "PHASE3": "osx-phase3",
+    "PHASE4": "osx-phase4",
+    "PHASE5": "osx-phase5",
+    "PHASE6": "osx-phase6",
+}
+
+PHASE_AGENTS = {
+    "PHASE0": "osx-analyzer",
+    "PHASE1": "osx-builder",
+    "PHASE2": "osx-analyzer",
+    "PHASE3": "osx-maintainer",
+    "PHASE4": "osx-maintainer",
+    "PHASE5": "osx-analyzer",
+    "PHASE6": "osx-maintainer",
+}
+
+VALID_TRANSITION_REASONS = [
+    "implementation_incorrect",
+    "artifacts_modified",
+    "retry_requested",
+]
+
+REQUIRED_SKILLS = [
+    "osx-concepts",
+    "osx-review-artifacts",
+    "osx-modify-artifacts",
+    "osc-apply-change",
+    "osx-review-test-compliance",
+    "osc-verify-change",
+    "osx-maintain-ai-docs",
+    "osc-sync-specs",
+    "osc-archive-change",
+]
+
+REQUIRED_SKILLS_ORIGINAL_NAMES = {
+    "osc-apply-change": "openspec-apply-change",
+    "osc-verify-change": "openspec-verify-change",
+    "osc-sync-specs": "openspec-sync-specs",
+    "osc-archive-change": "openspec-archive-change",
+}
+
+app = typer.Typer()
+
+lib_osx_path = SCRIPT_DIR / "lib" / "osx"
+
+
+class State:
+    """Global state holder."""
+
+    change_id: str = ""
+    change_dir: Optional[Path] = None
+    max_phase_iterations: int = DEFAULT_MAX_PHASE_ITERATIONS
+    timeout: int = DEFAULT_TIMEOUT
+    verbose: bool = False
+    dry_run: bool = False
+    force: bool = False
+    clean: bool = False
+    from_phase: str = ""
+    no_color: bool = False
+    log_file: Optional[Path] = None
+    log_user_specified: bool = False
+    total_invocations: int = 0
+    start_time: int = 0
+    interrupted: bool = False
+    child_pid: Optional[int] = None
+    model: str = ""
+
+
+state = State()
+
+
+def get_version() -> str:
+    """Get version from manifest.json."""
+    if MANIFEST_PATH.exists():
+        try:
+            manifest = json.loads(MANIFEST_PATH.read_text())
+            return (
+                manifest.get("resources", {})
+                .get("scripts", {})
+                .get("osx-orchestrate", {})
+                .get("version", "unknown")
+            )
+        except json.JSONDecodeError, KeyError:
+            pass
+    return "unknown"
+
+
+def get_timestamp() -> str:
+    """Get current UTC timestamp in ISO format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def find_change_dir(change: str) -> Optional[Path]:
+    """Find change directory (primary or archived)."""
+    primary = Path(f"openspec/changes/{change}")
+    if primary.is_dir():
+        return primary
+
+    archive_dir = Path("openspec/changes/archive")
+    if not archive_dir.is_dir():
+        return None
+
+    for d in sorted(archive_dir.iterdir()):
+        if d.is_dir() and d.name.endswith(f"-{change}"):
+            return d
+
+    return None
+
+
+def log(msg: str) -> None:
+    """Log info message."""
+    timestamp = get_timestamp()
+    output = f"{timestamp} [INFO] {msg}"
+    if state.no_color:
+        print(output)
+    else:
+        print(f"[blue]{output}[/blue]")
+
+
+def log_success(msg: str) -> None:
+    """Log success message."""
+    timestamp = get_timestamp()
+    output = f"{timestamp} [OK] {msg}"
+    if state.no_color:
+        print(output)
+    else:
+        print(f"[green]{output}[/green]")
+
+
+def log_warning(msg: str) -> None:
+    """Log warning message."""
+    timestamp = get_timestamp()
+    output = f"{timestamp} [WARN] {msg}"
+    if state.no_color:
+        print(output, file=sys.stderr)
+    else:
+        print(f"[yellow]{output}[/yellow]", file=sys.stderr)
+
+
+def log_error(msg: str) -> None:
+    """Log error message."""
+    timestamp = get_timestamp()
+    output = f"{timestamp} [ERROR] {msg}"
+    if state.no_color:
+        print(output, file=sys.stderr)
+    else:
+        print(f"[red]{output}[/red]", file=sys.stderr)
+
+
+def log_verbose(msg: str) -> None:
+    """Log verbose message."""
+    timestamp = get_timestamp()
+    output = f"{timestamp} [VERBOSE] {msg}"
+    if state.verbose:
+        if state.no_color:
+            print(output)
+        else:
+            print(f"[blue]{output}[/blue]")
+    elif state.log_file and state.log_file.exists():
+        with open(state.log_file, "a") as log_f:
+            log_f.write(re.sub(r"\x1b\[[0-9;]*m", "", output) + "\n")
+
+
+def run_osx_command(args: list) -> tuple[str, int]:
+    """Run osx lib command and return output + exit code."""
+    cmd = [sys.executable, str(lib_osx_path)] + args
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return result.stdout.strip(), result.returncode
+
+
+def is_valid_json_result(result: str) -> bool:
+    """Check if result is valid JSON with valid=true."""
+    if not result:
+        return False
+    try:
+        data = json.loads(result)
+        return data.get("valid", False) is True
+    except json.JSONDecodeError:
+        return False
+
+
+def print_validation_errors(result: str) -> None:
+    """Print validation errors from JSON result."""
+    try:
+        data = json.loads(result)
+        errors = data.get("errors", [])
+        for err in errors:
+            msg = err.get("message", "")
+            if msg:
+                log_error(msg)
+    except json.JSONDecodeError:
+        pass
+
+
+def validate_skills() -> None:
+    """Validate required skills exist."""
+    log("Validating required skills...")
+
+    stdout, exit_code = run_osx_command(["validate", "skills"])
+    if exit_code != 0 or not is_valid_json_result(stdout):
+        log_error("Required skills validation failed")
+        print_validation_errors(stdout)
+        log_error("Run: openspec-extended install opencode")
+        raise SystemExit(1)
+
+    log_verbose("All required skills found")
+
+
+def validate_commands() -> None:
+    """Validate required commands exist."""
+    log("Validating required commands...")
+
+    stdout, exit_code = run_osx_command(["validate", "commands"])
+    if exit_code != 0 or not is_valid_json_result(stdout):
+        log_error("Required commands validation failed")
+        print_validation_errors(stdout)
+        log_error("Run: openspec-extended install opencode")
+        raise SystemExit(1)
+
+    log_verbose("All required commands found")
+
+
+def validate_git() -> None:
+    """Validate git repository."""
+    log("Validating git repository...")
+
+    try:
+        subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, check=True)
+    except subprocess.CalledProcessError, FileNotFoundError:
+        log_error("Not in a git repository")
+        raise SystemExit(1)
+
+    result = subprocess.run(["git", "diff", "--quiet"], capture_output=True)
+    result_cached = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"], capture_output=True
+    )
+
+    if result.returncode != 0 or result_cached.returncode != 0:
+        log_warning("Git working directory is dirty")
+        log_warning("Uncommitted changes detected")
+
+        if not state.force and os.isatty(0):
+            print("")
+            print("Options:")
+            print("  1. Commit or stash changes before proceeding")
+            print("  2. Abort and clean up first")
+            print("  3. Continue anyway (use --force to skip this prompt)")
+            reply = input("Continue? [y/N] ")
+            print("")
+            if not reply.lower().startswith("y"):
+                log_error("Aborted due to dirty git state")
+                raise SystemExit(1)
+        else:
+            log_warning("Continuing with dirty git state (non-interactive or --force)")
+
+    log_verbose("Git repository is ready")
+
+
+def validate_change_dir() -> None:
+    """Validate change directory structure."""
+    log("Validating change directory...")
+
+    stdout, exit_code = run_osx_command(["validate", "change-dir", state.change_id])
+    if exit_code != 0 or not is_valid_json_result(stdout):
+        log_error("Change directory validation failed")
+        print_validation_errors(stdout)
+        log_error(f"Change directory: {state.change_dir}")
+        raise SystemExit(1)
+
+    log_verbose("Change directory validated")
+
+
+def validate_archive() -> tuple[bool, str]:
+    """Validate change is archived. Returns (success, archive_path)."""
+    stdout, exit_code = run_osx_command(["validate", "archive", state.change_id])
+    if exit_code != 0 or not is_valid_json_result(stdout):
+        return False, ""
+
+    try:
+        data = json.loads(stdout)
+        archive_path = data.get("archive", "")
+        return True, archive_path
+    except json.JSONDecodeError:
+        return False, ""
+
+
+def record_baseline() -> None:
+    """Record baseline (current commit/branch)."""
+    log("Recording baseline...")
+
+    stdout, exit_code = run_osx_command(["baseline", "record"])
+    if exit_code != 0:
+        log_error("Failed to record baseline")
+        raise SystemExit(1)
+
+    try:
+        data = json.loads(stdout)
+        commit = data.get("commit", "")
+        if not commit:
+            log_error("Failed to record baseline")
+            raise SystemExit(1)
+        log_verbose(f"Baseline recorded: {commit}")
+    except json.JSONDecodeError:
+        log_error("Failed to record baseline")
+        raise SystemExit(1)
+
+
+def read_state() -> Optional[dict]:
+    """Read state.json if exists and is valid."""
+    if state.change_dir is None:
+        return None
+
+    state_file = state.change_dir / "state.json"
+    if not state_file.exists():
+        return None
+
+    try:
+        data = json.loads(state_file.read_text())
+        phase = data.get("phase", "")
+        iteration = data.get("iteration", None)
+
+        if not phase or iteration is None:
+            log_error("State file missing required fields")
+            return None
+
+        if phase not in PHASES and phase != "COMPLETE":
+            log_error(f"State file has invalid phase value: {phase}")
+            return None
+
+        return data
+    except json.JSONDecodeError:
+        log_error("State file is corrupted, cannot resume")
+        return None
+
+
+def write_state(phase: str, iteration: int = 1, phase_complete: bool = False) -> None:
+    """Write state.json."""
+    if state.change_dir is None:
+        return
+
+    state_file = state.change_dir / "state.json"
+    phase_iterations = {}
+
+    if state_file.exists():
+        try:
+            existing = json.loads(state_file.read_text())
+            phase_iterations = existing.get("phase_iterations", {})
+        except json.JSONDecodeError:
+            pass
+
+    current_count = phase_iterations.get(phase, 0)
+    new_count = current_count + 1
+    phase_iterations[phase] = new_count
+
+    timestamp = get_timestamp()
+    state_data = {
+        "phase": phase,
+        "phase_name": PHASE_NAMES.get(phase, "UNKNOWN"),
+        "iteration": iteration,
+        "phase_complete": phase_complete,
+        "total_invocations": state.total_invocations,
+        "phase_iterations": phase_iterations,
+        "started_at": timestamp,
+        "last_updated": timestamp,
+    }
+
+    state_file.write_text(json.dumps(state_data, indent=2))
+    log_verbose(
+        f"State updated: {phase} (iteration {iteration}, complete: {phase_complete})"
+    )
+
+
+def get_current_phase() -> Optional[str]:
+    """Get current phase from state.json."""
+    data = read_state()
+    if data:
+        return data.get("phase")
+    return None
+
+
+def get_phase_iteration() -> int:
+    """Get current phase iteration from state.json."""
+    data = read_state()
+    if data:
+        return data.get("iteration", 0)
+    return 0
+
+
+def check_phase_complete() -> bool:
+    """Check if phase_complete is true in state.json."""
+    data = read_state()
+    if data:
+        return data.get("phase_complete", False) is True
+    return False
+
+
+def clear_phase_complete() -> None:
+    """Clear phase_complete flag in state.json."""
+    if state.change_dir is None:
+        return
+
+    state_file = state.change_dir / "state.json"
+    if not state_file.exists():
+        return
+
+    try:
+        data = json.loads(state_file.read_text())
+        data["phase_complete"] = False
+        state_file.write_text(json.dumps(data, indent=2))
+    except json.JSONDecodeError:
+        pass
+
+
+def check_transition() -> tuple[bool, str]:
+    """Check for explicit transition target. Returns (has_transition, target)."""
+    data = read_state()
+    if data and "transition" in data:
+        target = data["transition"].get("target", "")
+        if target:
+            return True, target
+    return False, ""
+
+
+def get_transition_reason() -> str:
+    """Get transition reason from state.json."""
+    data = read_state()
+    if data and "transition" in data:
+        return data["transition"].get("reason", "unknown")
+    return "unknown"
+
+
+def get_transition_details() -> str:
+    """Get transition details from state.json."""
+    data = read_state()
+    if data and "transition" in data:
+        return data["transition"].get("details", "")
+    return ""
+
+
+def clear_transition() -> None:
+    """Clear transition field in state.json."""
+    run_osx_command(["state", "clear-transition", state.change_id])
+
+
+def check_complete() -> bool:
+    """Check if complete.json exists."""
+    stdout, exit_code = run_osx_command(["complete", "check", state.change_id])
+    return exit_code == 0 and is_valid_json_result(stdout)
+
+
+def read_completion() -> Optional[str]:
+    """Read completion status."""
+    stdout, exit_code = run_osx_command(["complete", "get", state.change_id])
+    if exit_code != 0:
+        return None
+
+    try:
+        data = json.loads(stdout)
+        return data.get("status")
+    except json.JSONDecodeError:
+        return None
+
+
+def advance_phase(current: str) -> str:
+    """Compute next phase from current phase."""
+    order = {
+        "PHASE0": "PHASE1",
+        "PHASE1": "PHASE2",
+        "PHASE2": "PHASE3",
+        "PHASE3": "PHASE4",
+        "PHASE4": "PHASE5",
+        "PHASE5": "PHASE6",
+        "PHASE6": "COMPLETE",
+        "COMPLETE": "COMPLETE",
+    }
+    return order.get(current, "COMPLETE")
+
+
+def run_agent(phase: str) -> bool:
+    """Run agent for given phase."""
+    if state.dry_run:
+        log("[DRY RUN] Would run command for " + phase)
+        return True
+
+    log(f"Agent invocation #{state.total_invocations} for {phase}")
+
+    cmd_name = PHASE_COMMANDS.get(phase, "")
+    agent_name = PHASE_AGENTS.get(phase, "")
+    title = f"OpenSpec: {state.change_id} - {PHASE_NAMES.get(phase, '')}"
+
+    log_verbose(f"Using command: /{cmd_name}")
+    log_verbose(f"Using agent: {agent_name}")
+    log_verbose(f"Session title: {title}")
+
+    agent_log_file = Path(tempfile.mkstemp()[1])
+
+    cmd = [
+        "opencode",
+        "run",
+        "--command",
+        cmd_name,
+        "--agent",
+        agent_name,
+        state.change_id,
+        "--title=" + title,
+    ]
+    if state.model:
+        cmd.append(f"--model={state.model}")
+
+    try:
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        state.child_pid = process.pid
+
+        try:
+            if process.stdout:
+                for line in process.stdout:
+                    print(line, end="")
+        finally:
+            process.wait()
+            exit_code = process.returncode
+
+        state.child_pid = None
+
+        if state.log_file and agent_log_file.exists():
+            with open(state.log_file, "a") as log_f:
+                log_f.write(f"> {agent_name}\n")
+                log_f.write(agent_log_file.read_text())
+
+        agent_log_file.unlink(missing_ok=True)
+
+        if state.interrupted:
+            log_warning("Execution interrupted by user")
+            raise SystemExit(130)
+
+        if exit_code == 124:
+            log_error(f"Agent iteration timed out after {state.timeout // 60} minutes")
+            return False
+        elif exit_code != 0:
+            log_error(f"Agent execution failed with exit code {exit_code}")
+            return False
+
+        return True
+
+    except Exception as e:
+        log_error(f"Agent execution failed: {e}")
+        return False
+
+
+def run_phase(phase: str) -> bool:
+    """Run a phase with iterations."""
+    log(PHASE_NAMES.get(phase, phase))
+    iteration = 1
+
+    while iteration <= state.max_phase_iterations or state.max_phase_iterations == -1:
+        state.total_invocations += 1
+        write_state(phase, iteration)
+
+        if not run_agent(phase):
+            return False
+
+        if state.dry_run:
+            return True
+
+        if phase == "PHASE6":
+            success, _ = validate_archive()
+            if success:
+                log_success(f"{phase} completed in {iteration} iteration(s)")
+                return True
+        elif check_phase_complete():
+            log_success(f"{phase} completed in {iteration} iteration(s)")
+            clear_phase_complete()
+            return True
+
+        iteration += 1
+
+    log_warning(f"{phase} reached max phase iterations ({state.max_phase_iterations})")
+    return False
+
+
+def show_progress() -> None:
+    """Display progress summary."""
+    print("================================")
+    print("Progress Summary")
+    print("================================")
+    print(f"Change ID: {state.change_id}")
+
+    if state.change_dir:
+        print(f"Change directory: {state.change_dir}")
+
+    current_phase = get_current_phase()
+    if current_phase:
+        print(
+            f"Current phase: {current_phase} - {PHASE_NAMES.get(current_phase, 'UNKNOWN')}"
+        )
+        iteration = get_phase_iteration()
+        print(f"Phase iteration: {iteration}")
+    else:
+        print("Current phase: Not started")
+
+    print("")
+    print(f"Total invocations: {state.total_invocations}")
+
+    elapsed = 0
+    if state.start_time > 0:
+        elapsed = int(datetime.now(timezone.utc).timestamp()) - state.start_time
+    minutes = elapsed // 60
+    seconds = elapsed % 60
+    print(f"Elapsed time: {minutes}m {seconds}s")
+
+    if state.log_file:
+        print(f"Log file: {state.log_file}")
+
+    if state.change_dir:
+        state_file = state.change_dir / "state.json"
+        if state_file.exists():
+            print("")
+            print("Iterations by phase:")
+            try:
+                data = json.loads(state_file.read_text())
+                phase_iterations = data.get("phase_iterations", {})
+                for p in PHASES:
+                    count = phase_iterations.get(p, 0)
+                    print(f"  {p} ({PHASE_NAMES[p]}): {count}")
+            except json.JSONDecodeError:
+                pass
+
+    print("================================")
+
+
+def archive_log_file() -> bool:
+    """Archive log file to archive directory."""
+    if not state.log_file or not state.log_file.exists():
+        log_verbose("No log file to archive")
+        return True
+
+    if state.log_user_specified:
+        log_verbose("User-specified log path, not moving to archive")
+        return True
+
+    try:
+        os.sync()
+    except AttributeError, OSError:
+        pass
+
+    success, archive_dir = validate_archive()
+    if not success or not archive_dir:
+        log_error("Failed to get archive path")
+        if state.log_file:
+            log_error(f"Log file not archived: {state.log_file}")
+        return False
+
+    archive_path = Path(archive_dir)
+    if not archive_path.is_dir():
+        log_error(f"Archive directory does not exist: {archive_path}")
+        if state.log_file:
+            log_error(f"Log file not archived: {state.log_file}")
+        return False
+
+    archive_log = archive_path / "osx-orchestrate.log"
+
+    try:
+        shutil.move(str(state.log_file), str(archive_log))
+    except Exception as e:
+        log_error(f"Failed to move log file to archive: {e}")
+        return False
+
+    log_verbose(f"Log moved to archive: {archive_log}")
+
+    try:
+        subprocess.run(
+            ["git", "add", str(archive_log)], capture_output=True, check=True
+        )
+    except subprocess.CalledProcessError:
+        log_warning("Failed to add log file to git")
+        return True
+
+    try:
+        subprocess.run(
+            ["git", "commit", "--amend", "--no-edit"], capture_output=True, check=True
+        )
+    except subprocess.CalledProcessError:
+        log_error("Failed to amend archive commit with log file")
+        return False
+
+    log_verbose("Archive commit amended with log file")
+    return True
+
+
+def handle_interrupt(signum, frame) -> None:
+    """Handle SIGINT/SIGTERM signals."""
+    state.interrupted = True
+    if state.child_pid:
+        try:
+            os.kill(state.child_pid, signal.SIGTERM)
+        except ProcessLookupError, PermissionError:
+            pass
+
+
+def cleanup(exit_code: int) -> None:
+    """Cleanup on exit."""
+    if state.child_pid:
+        try:
+            os.kill(state.child_pid, signal.SIGTERM)
+        except ProcessLookupError, PermissionError:
+            pass
+
+    if state.interrupted:
+        log("")
+        log_warning("Execution interrupted by user")
+        log("State files preserved for resumption:")
+        if state.change_dir:
+            for fname in [
+                "state.json",
+                "complete.json",
+                "iterations.json",
+                "decision-log.json",
+            ]:
+                fp = state.change_dir / fname
+                if fp.exists():
+                    log(f"  {fp}")
+        log("")
+        log("To resume: Run script again with same change-id")
+        raise SystemExit(130)
+
+    if exit_code != 0:
+        log("")
+        log_error(f"Script exited with error (code {exit_code})")
+        log("State files preserved for investigation:")
+        if state.change_dir:
+            for fname in [
+                "state.json",
+                "complete.json",
+                "iterations.json",
+                "decision-log.json",
+            ]:
+                fp = state.change_dir / fname
+                if fp.exists():
+                    log(f"  {fp}")
+        log("")
+        log("To resume: Run script again with same change-id")
+    else:
+        if state.change_dir:
+            for fname in ["state.json", "complete.json"]:
+                fp = state.change_dir / fname
+                if fp.exists():
+                    try:
+                        fp.unlink()
+                    except OSError:
+                        log_warning(f"Failed to remove {fname}")
+
+        baseline = Path(".openspec-baseline.json")
+        if baseline.exists():
+            try:
+                baseline.unlink()
+            except OSError:
+                log_warning("Failed to remove .openspec-baseline.json")
+
+        if state.log_file and not state.log_user_specified and state.log_file.exists():
+            try:
+                state.log_file.unlink()
+            except OSError:
+                log_warning(f"Failed to remove {state.log_file}")
+
+
+def _list_changes() -> None:
+    """List available changes."""
+    print("Available OpenSpec changes:")
+    print("")
+
+    try:
+        result = subprocess.run(
+            ["openspec", "list", "--json"], capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            print("From openspec CLI:")
+            try:
+                changes = json.loads(result.stdout)
+                for change in changes:
+                    name = change.get("name", "")
+                    print(f"  - {name}")
+            except json.JSONDecodeError:
+                print("  (none)")
+    except subprocess.CalledProcessError, FileNotFoundError:
+        pass
+
+    print("")
+    print("From openspec/changes/ directory:")
+
+    changes_dir = Path("openspec/changes")
+    if changes_dir.is_dir():
+        for d in sorted(changes_dir.iterdir()):
+            if d.is_dir() and d.name != "archive":
+                valid_marker = " \u2713"
+                required = ["tasks.md", "proposal.md", "design.md"]
+                specs_dir = d / "specs"
+                if (
+                    not all((d / f).exists() for f in required)
+                    or not specs_dir.is_dir()
+                ):
+                    valid_marker = " \u2717"
+                print(f"  {d.name}{valid_marker}")
+
+    print("")
+    print("Legend: \u2713 = valid structure, \u2717 = missing required files")
+
+
+@app.command()
+def main(
+    change_name: str = typer.Argument(
+        ..., help="OpenSpec change ID (e.g., reverse-transformation)"
+    ),
+    timeout: int = typer.Option(
+        DEFAULT_TIMEOUT, "--timeout", "-t", help="Timeout per iteration in seconds"
+    ),
+    model: str = typer.Option(
+        "", "--model", "-m", help="Model to use for AI assistant"
+    ),
+    log_file_path: Optional[Path] = typer.Option(
+        None, "--log-file", "-l", help="Log output file"
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show detailed progress information"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-d", help="Show what would be done without executing"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Continue without prompts (for CI/CD)"
+    ),
+    clean: bool = typer.Option(
+        False, "--clean", "-c", help="Clean up state files for fresh start"
+    ),
+    no_color: bool = typer.Option(
+        False, "--no-color", "-n", help="Disable colored output"
+    ),
+    max_phase_iterations: int = typer.Option(
+        DEFAULT_MAX_PHASE_ITERATIONS,
+        "--max-phase-iterations",
+        help="Max retries per phase",
+    ),
+    from_phase: str = typer.Option(
+        "", "--from-phase", help="Resume from specific phase (PHASE0-PHASE6)"
+    ),
+    list_changes: bool = typer.Option(
+        False, "--list", help="List available changes and exit"
+    ),
+) -> None:
+    """
+    OpenSpec Extended Autonomous Workflow Orchestrator.
+    """
+    state.change_id = change_name
+    state.max_phase_iterations = max_phase_iterations
+    state.timeout = timeout
+    state.verbose = verbose
+    state.dry_run = dry_run
+    state.force = force
+    state.clean = clean
+    state.from_phase = from_phase
+    state.no_color = no_color
+    state.model = model
+
+    if list_changes:
+        _list_changes()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, handle_interrupt)
+    signal.signal(signal.SIGTERM, handle_interrupt)
+
+    state.change_dir = find_change_dir(state.change_id)
+    if not state.change_dir:
+        log_error(f"Change not found: {state.change_id}")
+        print("")
+        print("Tried:")
+        print(f"  - Direct path: openspec/changes/{state.change_id}")
+        try:
+            subprocess.run(["openspec", "list"], capture_output=True)
+            print("  - CLI lookup: openspec list")
+        except FileNotFoundError:
+            pass
+        print("")
+        print("Run 'osx-orchestrate.py --list' to see available changes")
+        raise SystemExit(1)
+
+    if (
+        "archive" in str(state.change_dir)
+        and not (state.change_dir / "state.json").exists()
+    ):
+        log_success(f"Change '{state.change_id}' is already archived and complete")
+        log(f"Archive location: {state.change_dir}")
+        raise SystemExit(0)
+
+    if log_file_path:
+        state.log_file = log_file_path
+        state.log_user_specified = True
+
+    state.start_time = int(datetime.now(timezone.utc).timestamp())
+
+    log("")
+    log("================================")
+    log("OpenSpec Autonomous Implementation")
+    log("================================")
+    log(f"Version: {get_version()}")
+    log(f"Change ID: {state.change_id}")
+    log(f"Change directory: {state.change_dir}")
+    if state.model:
+        log(f"Model: {state.model}")
+    log(f"Max phase iterations: {state.max_phase_iterations}")
+    log(f"Timeout: {state.timeout} seconds")
+    if state.log_file:
+        log(f"Log file: {state.log_file}")
+    log("================================")
+    log("")
+
+    if state.clean:
+        log_verbose("Cleaning up state files for fresh start...")
+        if state.change_dir:
+            for fname in ["state.json", "complete.json", "iterations.json"]:
+                fp = state.change_dir / fname
+                if fp.exists():
+                    try:
+                        fp.unlink()
+                    except OSError:
+                        pass
+        baseline = Path(".openspec-baseline.json")
+        if baseline.exists():
+            try:
+                baseline.unlink()
+            except OSError:
+                pass
+        log_file_unset = Path(f".osx-orchestrate-{state.change_id}.log")
+        if log_file_unset.exists():
+            try:
+                log_file_unset.unlink()
+            except OSError:
+                pass
+        log_verbose("State files cleaned, starting fresh")
+
+        if not state.from_phase:
+            try:
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"], capture_output=True, check=True
+                )
+            except subprocess.CalledProcessError, FileNotFoundError:
+                log_error("Required tool not found: git")
+                raise SystemExit(1)
+
+            try:
+                subprocess.run(["jq", "--version"], capture_output=True)
+            except FileNotFoundError:
+                log_error("Required tool not found: jq")
+                raise SystemExit(1)
+
+            try:
+                subprocess.run(["openspec", "--version"], capture_output=True)
+            except FileNotFoundError:
+                log_error("Required tool not found: openspec")
+                raise SystemExit(1)
+
+            try:
+                subprocess.run(["opencode", "--version"], capture_output=True)
+            except FileNotFoundError:
+                log_error("Required tool not found: opencode")
+                raise SystemExit(1)
+
+            validate_skills()
+            validate_commands()
+            validate_git()
+            validate_change_dir()
+
+            record_baseline()
+        else:
+            log("Skipping pre-flight validation (--from-phase specified)")
+
+    resume_phase = None
+    data = read_state()
+    if not state.from_phase and data:
+        resume_phase = data.get("phase")
+        if resume_phase:
+            log(
+                f"Resuming from phase: {resume_phase} - {PHASE_NAMES.get(resume_phase, 'UNKNOWN')}"
+            )
+
+            if not state.force and os.isatty(0):
+                print("")
+                reply = input("Continue? [Y/n] ")
+                print("")
+                if reply.lower().startswith("n"):
+                    log_error("Aborted by user")
+                    raise SystemExit(1)
+            else:
+                log("Auto-continuing (non-interactive or --force)")
+
+    current_phase = "PHASE0"
+    started = False
+    phase_determined = False
+
+    if resume_phase:
+        current_phase = resume_phase
+        phase_determined = True
+
+    while True:
+        if not started and state.from_phase:
+            current_phase = state.from_phase
+            log(
+                f"Starting from phase: {current_phase} - {PHASE_NAMES.get(current_phase, 'UNKNOWN')}"
+            )
+            started = True
+            phase_determined = True
+        elif not phase_determined:
+            detected = get_current_phase()
+            if detected:
+                current_phase = detected
+                phase_determined = True
+            else:
+                current_phase = "PHASE0"
+                phase_determined = True
+
+        if check_complete():
+            complete_file = (
+                state.change_dir / "complete.json" if state.change_dir else None
+            )
+            if complete_file and complete_file.exists():
+                try:
+                    data = json.loads(complete_file.read_text())
+                    if data.get("with_blocker", False):
+                        blocker_reason = data.get("blocker_reason", "Unknown")
+                        log("")
+                        log("================================")
+                        log_error("CRITICAL BLOCKER DETECTED")
+                        log("================================")
+                        log_warning(f"Blocker: {blocker_reason}")
+                        log("Review decision-log.json for details")
+                        show_progress()
+
+                        raise SystemExit(1)
+                except json.JSONDecodeError:
+                    pass
+
+        if current_phase in PHASES:
+            if not run_phase(current_phase):
+                log_error(f"{current_phase} failed")
+                raise SystemExit(1)
+
+            show_progress()
+
+            has_transition, transition_target = check_transition()
+            if has_transition and transition_target:
+                reason = get_transition_reason()
+                details = get_transition_details()
+
+                log(f"Explicit transition: {current_phase} -> {transition_target}")
+                log_verbose(f"Reason: {reason}")
+                if details:
+                    log_verbose(f"Details: {details}")
+
+                clear_transition()
+                clear_phase_complete()
+                current_phase = transition_target
+            else:
+                next_phase = advance_phase(current_phase)
+                log(f"Phase transition: {current_phase} -> {next_phase}")
+                current_phase = next_phase
+
+        elif current_phase == "PHASE6":
+            if not run_phase(current_phase):
+                log_error(f"{current_phase} failed")
+                raise SystemExit(1)
+
+            if (
+                state.log_file
+                and not state.log_user_specified
+                and state.log_file.exists()
+            ):
+                if not archive_log_file():
+                    log_error("Log file archiving failed")
+                    log_error("Archive validation will not proceed without log file")
+                    raise SystemExit(1)
+
+            success, _ = validate_archive()
+            if success:
+                log("")
+                log("================================")
+                log_success("Implementation completed successfully!")
+                log("================================")
+
+                raise SystemExit(0)
+            else:
+                log("")
+                log_error("Archive validation failed")
+                log("State files preserved for investigation")
+                raise SystemExit(1)
+
+        elif current_phase == "COMPLETE":
+            log("All phases complete, validating...")
+            break
+
+        else:
+            log_error(f"Unknown phase: {current_phase}")
+            raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    try:
+        app()
+    except SystemExit as e:
+        sys.exit(e.code)
+    finally:
+        cleanup(0)

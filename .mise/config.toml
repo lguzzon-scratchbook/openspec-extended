@@ -3,6 +3,8 @@ shellcheck = "latest"
 pre-commit = {version = "latest", postinstall = "pre-commit install"}
 bats = "latest"
 uv = "latest"
+ty = "latest"
+ruff = "latest"
 
 [env]
 _.python.venv = { path = ".venv" }
@@ -30,8 +32,8 @@ description = "Run bash unit tests"
 run = "bats tests/unit"
 
 [tasks."test:unit:python"]
-description = "Run Python unit tests (osc tool)"
-run = "uv run pytest tests/lib -v"
+description = "Run Python unit tests"
+run = "uv run pytest tests/lib tests/unit/test_openspec_extended.py tests/unit/test_osx_orchestrate.py -v --no-header"
 
 [tasks."test:integration"]
 description = "Run integration tests"
@@ -44,4 +46,12 @@ run = "bats tests/e2e/mechanism.bats"
 [tasks."test:e2e"]
 description = "Run all E2E tests (requires E2E_CONFIRM=1)"
 run = "E2E_CONFIRM=1 bats tests/e2e/full-workflow.bats"
+
+[tasks.lint]
+description = "Lint Python files with ruff"
+run = "ruff check bin/openspec-extended.py resources/opencode/scripts/osx-orchestrate.py tests/unit/test_openspec_extended.py tests/unit/test_osx_orchestrate.py"
+
+[tasks."typecheck"]
+description = "Type check Python files with ty"
+run = "ty check bin/openspec-extended.py resources/opencode/scripts/osx-orchestrate.py"
 
