@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 OSX_BIN = Path(__file__).parent.parent.parent / "bin" / "openspec-extended"
 PROJECT_ROOT = Path(__file__).parent.parent.parent

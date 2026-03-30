@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 # Load the osx module from the file path (no .py extension)
 _OSX_PATH = Path(__file__).parent.parent.parent / "resources/opencode/scripts/lib/osx"
 

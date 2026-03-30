@@ -13,7 +13,7 @@ _.python.venv = { path = ".venv" }
 postinstall = ["mise run sync-core", "uv sync"]
 
 [tasks.test]
-description = "Run unit and integration tests"
+description = "Run unit, integration and mechanism tests"
 run = [
     { task="test:unit"},
     { task="test:integration"},
@@ -22,36 +22,30 @@ run = [
 
 [tasks."test:unit"]
 description = "Run unit tests"
-run = [
-    { task="test:unit:bash"},
-    { task="test:unit:python"},
-]
-
-[tasks."test:unit:bash"]
-description = "Run bash unit tests"
-run = "bats tests/unit"
-
-[tasks."test:unit:python"]
-description = "Run Python unit tests"
-run = "uv run pytest tests/lib tests/unit/test_openspec_extended.py tests/unit/test_osx_orchestrate.py -v --no-header"
+run = "uv run pytest -m unit -v --no-header"
 
 [tasks."test:integration"]
 description = "Run integration tests"
-run = "bats tests/integration"
+run = "uv run pytest -m integration -v --no-header"
 
 [tasks."test:mechanism"]
-description = "Run E2E mechanism tests (no AI calls)"
-run = "bats tests/e2e/mechanism.bats"
+description = "Run mechanism tests (no AI calls)"
+run = "uv run pytest -m mechanism -v --no-header"
 
 [tasks."test:e2e"]
-description = "Run all E2E tests (requires E2E_CONFIRM=1)"
-run = "E2E_CONFIRM=1 bats tests/e2e/full-workflow.bats"
+description = "Run E2E full workflow tests (requires E2E_CONFIRM=1)"
+env = { "E2E_CONFIRM" = "1" }
+run = "uv run pytest -m e2e -v --no-header"
+
+[tasks."test:e2e:full"]
+description = "Run all E2E tests including mechanism tests"
+env = { "E2E_CONFIRM" = "1" }
+run = "uv run pytest -m 'e2e or mechanism' -v --no-header"
 
 [tasks.lint]
 description = "Lint Python files with ruff"
-run = "ruff check bin/openspec-extended resources/opencode/scripts/osx-orchestrate tests/unit/test_openspec_extended.py tests/unit/test_osx_orchestrate.py"
+run = "ruff check bin/openspec-extended resources/opencode/scripts/osx-orchestrate tests/"
 
 [tasks."typecheck"]
 description = "Type check Python files with ty"
 run = "ty check bin/openspec-extended resources/opencode/scripts/osx-orchestrate"
-

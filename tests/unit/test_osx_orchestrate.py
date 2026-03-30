@@ -11,6 +11,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 scripts_path = Path(__file__).parent.parent.parent / "resources/opencode/scripts"
 sys.path.insert(0, str(scripts_path))
 

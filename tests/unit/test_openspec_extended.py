@@ -12,6 +12,8 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+pytestmark = pytest.mark.unit
+
 bin_path = Path(__file__).parent.parent.parent / "bin"
 sys.path.insert(0, str(bin_path))
 

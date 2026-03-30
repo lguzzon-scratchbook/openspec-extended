@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 OSX_LIB = (
     Path(__file__).parent.parent.parent
