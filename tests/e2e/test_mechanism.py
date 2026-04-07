@@ -169,7 +169,7 @@ class TestDryRun:
         setup_minimal_change(e2e_repo, "dry-test")
 
         exit_code, stdout, stderr = run_osx_orchestrate(
-            e2e_repo, "dry-test", "--dry-run", "--max-phase-iterations", "1"
+            e2e_repo, "dry-test", "--dry-run", "--max-phase-iterations=1"
         )
         combined = stdout + stderr
         assert "[DRY RUN]" in combined, f"Expected '[DRY RUN]' in output: {combined}"

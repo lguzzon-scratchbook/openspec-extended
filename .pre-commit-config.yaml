@@ -6,7 +6,7 @@ repos:
         entry: mise exec -- shellcheck -s bash --rcfile=.shellcheckrc
         language: system
         types: [shell]
-        files: ^(bin/openspecx-extended|\.mise/tasks/)
+        files: install.sh
 
       - id: check-version-bump
         name: Check version bump in versioned files
@@ -16,8 +16,8 @@ repos:
         pass_filenames: false
 
       - id: test
-        name: Test the osx-orchestrate script and its dependencies
-        entry: mise run test
+        name: Verify osx-orchestrate script and its dependencies
+        entry: mise run verify
         language: system
         files: ^(resources/opencode/scripts/|tests/)
         pass_filenames: false
