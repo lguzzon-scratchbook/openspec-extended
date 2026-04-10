@@ -14,6 +14,8 @@ a = Analysis(
     binaries=[],
     datas=[
         (str(resources_path), "resources/opencode"),
+        (str(project_root / "source" / "orchestrator"), "source/orchestrator"),
+        (str(project_root / "source" / "lib"), "source/lib"),
     ],
     hiddenimports=[
         "typer",

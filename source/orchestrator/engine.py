@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from rich import print as rich_print
+
 import toml
 
 PHASES = ["PHASE0", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "PHASE5", "PHASE6"]
@@ -127,7 +129,7 @@ def log(state: OrchestratorState, msg: str) -> None:
     if state.no_color:
         print(output)
     else:
-        print(f"[blue]{output}[/blue]")
+        rich_print(f"[blue]{output}[/blue]")
 
 
 def log_success(state: OrchestratorState, msg: str) -> None:
@@ -136,7 +138,7 @@ def log_success(state: OrchestratorState, msg: str) -> None:
     if state.no_color:
         print(output)
     else:
-        print(f"[green]{output}[/green]")
+        rich_print(f"[green]{output}[/green]")
 
 
 def log_warning(state: OrchestratorState, msg: str) -> None:
@@ -145,7 +147,7 @@ def log_warning(state: OrchestratorState, msg: str) -> None:
     if state.no_color:
         print(output, file=sys.stderr)
     else:
-        print(f"[yellow]{output}[/yellow]", file=sys.stderr)
+        rich_print(f"[yellow]{output}[/yellow]", file=sys.stderr)
 
 
 def log_error(state: OrchestratorState, msg: str) -> None:
@@ -154,7 +156,7 @@ def log_error(state: OrchestratorState, msg: str) -> None:
     if state.no_color:
         print(output, file=sys.stderr)
     else:
-        print(f"[red]{output}[/red]", file=sys.stderr)
+        rich_print(f"[red]{output}[/red]", file=sys.stderr)
 
 
 def log_verbose(state: OrchestratorState, msg: str) -> None:
@@ -164,7 +166,7 @@ def log_verbose(state: OrchestratorState, msg: str) -> None:
         if state.no_color:
             print(output)
         else:
-            print(f"[blue]{output}[/blue]")
+            rich_print(f"[blue]{output}[/blue]")
     elif state.log_file and state.log_file.exists():
         with open(state.log_file, "a") as log_f:
             log_f.write(re.sub(r"\x1b\[[0-9;]*m", "", output) + "\n")
