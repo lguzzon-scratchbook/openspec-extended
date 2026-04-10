@@ -15,7 +15,6 @@ from rich.console import Console
 
 from source import __version__
 from source.orchestrator.engine import run_orchestrator
-from source.lib.osx import app as osx_app
 
 SCRIPT_NAME = "openspec-extended"
 
@@ -28,7 +27,6 @@ app = typer.Typer(
     help=f"{SCRIPT_NAME} - Installer and orchestrator for OpenSpec resources",
     add_completion=False,
 )
-app.add_typer(osx_app, name="osx")
 
 
 def get_resources_dir() -> Path:
@@ -498,7 +496,10 @@ def validate_deployment(target_dir: Path, manifest: dict) -> None:
         console.print(f"  Validation: {warnings} warning(s)")
 
 
-@app.command()
+@app.command(
+    "install",
+    help="Deploy extended resources (skills, commands, agents, scripts) to tool directory",
+)
 def install(
     tool: str = typer.Argument(..., help="Target tool: opencode or claude"),
     with_core: bool = typer.Option(
@@ -526,7 +527,10 @@ def install(
         validate_deployment(target_dir, manifest_data)
 
 
-@app.command()
+@app.command(
+    "update",
+    help="Force reinstall all resources (same as install but always overwrites)",
+)
 def update(
     tool: str = typer.Argument(..., help="Target tool: opencode or claude"),
     with_core: bool = typer.Option(
@@ -554,18 +558,7 @@ def update(
         validate_deployment(target_dir, manifest_data)
 
 
-@app.command()
-def run(
-    change_id: str = typer.Argument(..., help="Change ID to run"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-) -> None:
-    sys.argv = ["orchestrate", change_id]
-    if verbose:
-        sys.argv.append("--verbose")
-    run_orchestrator()
-
-
-@app.command()
+@app.command("orchestrate", help="Run the 7-phase autonomous change workflow")
 def orchestrate(
     change_name: str = typer.Argument(..., help="OpenSpec change ID"),
     timeout: int = typer.Option(
