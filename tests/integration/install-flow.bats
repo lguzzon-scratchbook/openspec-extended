@@ -393,16 +393,16 @@ load_installer_functions() {
     run_osx install opencode
     [ "$status" -eq 0 ]
     
-    # Create mock openspec CLI output in command/ (singular)
-    mkdir -p .opencode/command
-    echo "# opsx-apply command" > .opencode/command/opsx-apply.md
-    echo "# opsx-archive command" > .opencode/command/opsx-archive.md
+    # Create mock openspec CLI output in commands/ (where upstream now writes)
+    mkdir -p .opencode/commands
+    echo "# opsx-apply command" > .opencode/commands/opsx-apply.md
+    echo "# opsx-archive command" > .opencode/commands/opsx-archive.md
     
     # Source and call rename function
     load_installer_functions
     rename_core_resources "opencode"
     
-    # Verify renamed files exist in commands/ (plural)
+    # Verify renamed files exist in commands/
     assert_file_exists ".opencode/commands/osc-apply.md"
     assert_file_exists ".opencode/commands/osc-archive.md"
     
@@ -410,41 +410,14 @@ load_installer_functions() {
     [[ ! -f ".opencode/commands/opsx-apply.md" ]]
 }
 
-@test "install-flow: rename_core_resources consolidates command/ to commands/" {
+@test "install-flow: rename_core_resources moves opsx subdir to commands/osc/" {
     # First install to create base structure
     run_osx install opencode
     [ "$status" -eq 0 ]
     
-    # Create mock openspec CLI output in command/ (singular)
-    mkdir -p .opencode/command
-    echo "# osc-explore command" > .opencode/command/osc-explore.md
-    echo "# osc-new command" > .opencode/command/osc-new.md
-    
-    # Source and call rename function
-    load_installer_functions
-    rename_core_resources "opencode"
-    
-    # Verify files moved to commands/ (plural)
-    assert_file_exists ".opencode/commands/osc-explore.md"
-    assert_file_exists ".opencode/commands/osc-new.md"
-    
-    # Verify command/ (singular) directory is removed
-    [[ ! -d ".opencode/command" ]]
-}
-
-@test "install-flow: rename_core_resources moves osx/opsx subdirs to commands/osc/" {
-    # First install to create base structure
-    run_osx install opencode
-    [ "$status" -eq 0 ]
-    
-    # Create mock openspec CLI output with subdirectory
-    mkdir -p .opencode/command/osx
-    echo "# osx subcommand" > .opencode/command/osx/phase0.md
-    echo "# another subcommand" > .opencode/command/osx/phase1.md
-    
-    # Also test opsx subdir
-    mkdir -p .opencode/command/opsx
-    echo "# opsx subcommand" > .opencode/command/opsx/apply.md
+    # Create mock openspec CLI output with subdirectory (Claude adapter style)
+    mkdir -p .opencode/commands/opsx
+    echo "# opsx subcommand" > .opencode/commands/opsx/apply.md
     
     # Source and call rename function
     load_installer_functions
@@ -452,10 +425,5 @@ load_installer_functions() {
     
     # Verify subdirectory moved and renamed to osc/
     assert_dir_exists ".opencode/commands/osc"
-    assert_file_exists ".opencode/commands/osc/phase0.md"
-    assert_file_exists ".opencode/commands/osc/phase1.md"
     assert_file_exists ".opencode/commands/osc/apply.md"
-    
-    # Verify original subdirs don't exist
-    [[ ! -d ".opencode/command" ]]
 }
