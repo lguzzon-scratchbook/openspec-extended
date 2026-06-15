@@ -15,7 +15,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="openspec-extended"
-readonly SCRIPT_VERSION="0.2.0"
+readonly SCRIPT_VERSION="0.2.1"
 
 # Configurable via environment
 PREFIX="${PREFIX:-$HOME/.local}"
@@ -388,6 +388,7 @@ run_install() {
 
     log_info "Extracting..."
     tar -xzf "$tarball" -C "$temp_dir" --no-same-owner
+    find "$temp_dir" -type f -name "AGENTS.md" -delete 2>/dev/null || true
 
     # Tarball layout: openspec-extended/bin/openspec-extended
     local extracted_bin="$temp_dir/openspec-extended/bin/openspec-extended"

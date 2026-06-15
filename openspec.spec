@@ -8,15 +8,33 @@ project_root = Path.cwd()
 resources_path = project_root / "resources" / "opencode"
 package_path = project_root / "source"
 
+
+def _collect_files_excluding_agents_md(src_dir, dst_prefix):
+    items = []
+    src = Path(src_dir)
+    if not src.exists():
+        return items
+    for path in src.rglob("*"):
+        if path.is_file() and path.name != "AGENTS.md":
+            rel = path.relative_to(src)
+            dst = str(Path(dst_prefix) / rel.parent)
+            items.append((str(path), dst))
+    return items
+
+
 a = Analysis(
     [str(package_path / "__main__.py")],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[
-        (str(resources_path), "resources/opencode"),
-        (str(project_root / "source" / "orchestrator"), "source/orchestrator"),
-        (str(project_root / "source" / "lib"), "source/lib"),
-    ],
+    datas=(
+        _collect_files_excluding_agents_md(resources_path, "resources/opencode")
+        + _collect_files_excluding_agents_md(
+            project_root / "source" / "orchestrator", "source/orchestrator"
+        )
+        + _collect_files_excluding_agents_md(
+            project_root / "source" / "lib", "source/lib"
+        )
+    ),
     hiddenimports=[
         "typer",
         "toml",
