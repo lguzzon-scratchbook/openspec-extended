@@ -1,10 +1,11 @@
 [tools]
 shellcheck = "latest"
-pre-commit = {version = "latest", postinstall = "pre-commit install"}
+pre-commit = { version = "latest", postinstall = "pre-commit install" }
 bats = "latest"
 uv = "latest"
 ty = "latest"
 ruff = "latest"
+jq = "latest"
 
 [env]
 _.python.venv = { path = ".venv" }
@@ -15,18 +16,18 @@ postinstall = ["mise run sync-core", "uv sync --all-extras"]
 [tasks.verify]
 description = "Ensure the quality of the project"
 run = [
-    { task="typecheck"},
-    { task="format"},
-    { task="lint"},
-    { task="test"},
+    { task = "typecheck" },
+    { task = "format" },
+    { task = "lint" },
+    { task = "test" },
 ]
 
 [tasks.test]
 description = "Run unit, integration and mechanism tests"
 run = [
-    { task="test:unit"},
-    { task="test:integration"},
-    { task="test:mechanism"},
+    { task = "test:unit" },
+    { task = "test:integration" },
+    { task = "test:mechanism" },
 ]
 
 [tasks."test:unit"]
@@ -44,11 +45,15 @@ run = "uv run pytest -m mechanism -q"
 [tasks."test:e2e"]
 description = "Run E2E full workflow tests"
 env = { "E2E_CONFIRM" = "1" }
-run = "uv run pytest -m e2e -q"
+depends = "build"
+run = "bats tests/e2e/full-workflow.bats"
 
 [tasks.lint]
-description = "Lint Python files with ruff"
-run = "ruff check --fix -q source/ .mise/tasks/version/check .mise/tasks/version/update .mise/tasks/version/lib/"
+description = "Lint Python files with ruff, shellcheck on bash tasks"
+run = [
+    "ruff check --fix -q source/",
+    "shellcheck -x .mise/tasks/release .mise/tasks/sync-core .mise/tasks/version/check .mise/tasks/version/update .mise/tasks/version/lib/*.sh install.sh",
+]
 
 [tasks.format]
 description = "Format Python files with ruff"
