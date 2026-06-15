@@ -1,267 +1,254 @@
-#!/usr/bin/env python3
-"""Verify version bump when versioned files are modified."""
+#!/usr/bin/env bash
+# Verify version bump when versioned files are modified.
+# Run via: mise run version:check
 
-from __future__ import annotations
+set -euo pipefail
 
-import json
-import subprocess
-import sys
-from pathlib import Path
-from typing import Optional
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/manifest.sh
+source "$SCRIPT_DIR/lib/manifest.sh"
+# shellcheck source=lib/detect.sh
+source "$SCRIPT_DIR/lib/detect.sh"
+# shellcheck source=lib/state.sh
+source "$SCRIPT_DIR/lib/state.sh"
 
-sys.path.insert(0, str(Path(__file__).parent / "lib"))
+# Global accumulator; we build it with jq one entry at a time.
+FILES_JSON="[]"
 
-from manifest import (
-    Manifest,
-    get_platform_for_path,
-    get_resource_info_from_path,
-    validate_semver,
-)
-from detect import detect_bump_for_resource
-from state import write_version_state
+get_staged_files() {
+    git diff --cached --name-only --diff-filter=ACMR -- \
+        "resources/*/skills/*/SKILL.md" \
+        "resources/*/skills/*/references/*.md" \
+        "resources/*/skills/*/scripts/*" \
+        "resources/*/agents/*.md" \
+        "resources/*/commands/*.md" \
+        "resources/*/commands/*/*.md" 2>/dev/null || true
+}
 
+get_script_files() {
+    git diff --cached --name-only --diff-filter=ACMR -- \
+        "install.sh" "source/cli.py" 2>/dev/null || true
+}
 
-def get_staged_files() -> list[str]:
-    patterns = [
-        "resources/*/skills/*/SKILL.md",
-        "resources/*/skills/*/references/*.md",
-        "resources/*/skills/*/scripts/*",
-        "resources/*/agents/*.md",
-        "resources/*/commands/*.md",
-        "resources/*/commands/*/*.md",
-        "resources/*/scripts/osx-orchestrate",
-        "resources/*/scripts/lib/osx",
-    ]
+get_git_show_content() {
+    local path="$1"
+    git show "HEAD:${path}" 2>/dev/null || true
+}
 
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "--"] + patterns,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return [f for f in result.stdout.strip().split("\n") if f]
-    except subprocess.CalledProcessError:
-        return []
+# Extract the SCRIPT_VERSION value from a script file.
+# Handles both `SCRIPT_VERSION = "x"` (Python) and `SCRIPT_VERSION="x"` (bash).
+get_script_version_from_file() {
+    local file_path="$1"
+    [[ -f "$file_path" ]] || return 1
+    grep -E '^[[:space:]]*SCRIPT_VERSION[[:space:]]*=' "$file_path" \
+        | head -n1 \
+        | sed -E 's/^[[:space:]]*SCRIPT_VERSION[[:space:]]*=[[:space:]]*"?([^"]*)"?$/\1/'
+}
 
+append_entry() {
+    FILES_JSON=$(jq --argjson e "$1" '. + [$e]' <<< "$FILES_JSON")
+}
 
-def get_script_files() -> list[str]:
-    try:
-        result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "--", "install.sh", "bin/openspecx"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return [f for f in result.stdout.strip().split("\n") if f]
-    except subprocess.CalledProcessError:
-        return []
+check_resource_file() {
+    local file_path="$1"
+    local resource_info platform resource_type resource_name manifest
 
+    if ! resource_info=$(resource_info_from_path "$file_path"); then
+        return 0
+    fi
+    if ! platform=$(platform_for_path "$file_path"); then
+        return 0
+    fi
 
-def get_git_show_content(path: str) -> Optional[str]:
-    try:
-        result = subprocess.run(
-            ["git", "show", f"HEAD:{path}"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0:
-            return result.stdout
-    except subprocess.CalledProcessError:
-        pass
-    return None
+    resource_type="${resource_info%%:*}"
+    resource_name="${resource_info##*:}"
+    manifest=$(manifest_path_for_platform "$platform")
 
+    if [[ ! -f "$manifest" ]]; then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg platform "$platform" \
+            --arg rt "$resource_type" \
+            --arg rn "$resource_name" \
+            '{path:$path, platform:$platform, resource_type:$rt, resource_name:$rn, current_version:"", status:"error", error:("Could not load " + $platform + " manifest")}')"
+        return 0
+    fi
 
-def get_script_version_from_file(file_path: str) -> Optional[str]:
-    path = Path(file_path)
-    if not path.exists():
-        return None
-    for line in path.read_text().split("\n"):
-        if line.startswith("SCRIPT_VERSION="):
-            return line.split("=", 1)[1].strip().strip('"')
-    return None
+    local current_version
+    current_version=$(get_resource_version "$manifest" "$resource_type" "$resource_name" || true)
+    if [[ -z "$current_version" ]]; then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg platform "$platform" \
+            --arg rt "$resource_type" \
+            --arg rn "$resource_name" \
+            '{path:$path, platform:$platform, resource_type:$rt, resource_name:$rn, current_version:"", status:"error", error:("Resource \"" + $rn + "\" not found in " + $platform + " manifest")}')"
+        return 0
+    fi
 
+    if ! validate_semver "$current_version"; then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg platform "$platform" \
+            --arg rt "$resource_type" \
+            --arg rn "$resource_name" \
+            --arg v "$current_version" \
+            '{path:$path, platform:$platform, resource_type:$rt, resource_name:$rn, current_version:$v, status:"error", error:"Invalid version format"}')"
+        return 0
+    fi
 
-def main():
-    output_format = "table"
-    if len(sys.argv) > 1 and sys.argv[1] == "--json":
-        output_format = "json"
+    local git_content
+    git_content=$(get_git_show_content "$file_path")
+    if [[ -n "$git_content" ]]; then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg platform "$platform" \
+            --arg rt "$resource_type" \
+            --arg rn "$resource_name" \
+            --arg v "$current_version" \
+            '{path:$path, platform:$platform, resource_type:$rt, resource_name:$rn, current_version:$v, status:"needs_bump", error:""}')"
+    else
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg platform "$platform" \
+            --arg rt "$resource_type" \
+            --arg rn "$resource_name" \
+            --arg v "$current_version" \
+            '{path:$path, platform:$platform, resource_type:$rt, resource_name:$rn, current_version:$v, status:"ok", error:""}')"
+    fi
+}
 
-    staged_files = get_staged_files()
-    script_files = get_script_files()
+check_script_file() {
+    local file_path="$1"
+    local current_version
 
-    files = []
+    if ! current_version=$(get_script_version_from_file "$file_path"); then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg rn "$(basename "$file_path")" \
+            '{path:$path, platform:"root", resource_type:"scripts", resource_name:$rn, current_version:"", status:"error", error:"SCRIPT_VERSION not found"}')"
+        return 0
+    fi
 
-    for file_path in staged_files:
-        resource_info = get_resource_info_from_path(file_path)
-        if not resource_info:
-            continue
+    if ! validate_semver "$current_version"; then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg rn "$(basename "$file_path")" \
+            --arg v "$current_version" \
+            '{path:$path, platform:"root", resource_type:"scripts", resource_name:$rn, current_version:$v, status:"error", error:"Invalid version format"}')"
+        return 0
+    fi
 
-        platform = get_platform_for_path(file_path)
-        if not platform:
-            continue
+    local git_content
+    git_content=$(get_git_show_content "$file_path")
+    if [[ -n "$git_content" ]]; then
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg rn "$(basename "$file_path")" \
+            --arg v "$current_version" \
+            '{path:$path, platform:"root", resource_type:"scripts", resource_name:$rn, current_version:$v, status:"needs_bump", error:""}')"
+    else
+        append_entry "$(jq -n \
+            --arg path "$file_path" \
+            --arg rn "$(basename "$file_path")" \
+            --arg v "$current_version" \
+            '{path:$path, platform:"root", resource_type:"scripts", resource_name:$rn, current_version:$v, status:"ok", error:""}')"
+    fi
+}
 
-        resource_type, resource_name = resource_info.split(":", 1)
+upgrade_needs_bump() {
+    local entry="$1"
+    local path
+    path=$(jq -r '.path' <<< "$entry")
+    local bump_type
+    bump_type=$(detect_bump_type "$path")
+    case "$bump_type" in
+        major|minor|patch) jq --arg s "needs_${bump_type}" '.status = $s' <<< "$entry" ;;
+        *) jq --arg s "needs_patch" '.status = $s' <<< "$entry" ;;
+    esac
+}
 
-        try:
-            manifest = Manifest.load(platform)
-        except Exception:
-            files.append({
-                "path": file_path,
-                "platform": platform,
-                "resource_type": resource_type,
-                "resource_name": resource_name,
-                "current_version": "",
-                "status": "error",
-                "error": f"Could not load {platform} manifest",
-            })
-            continue
+print_table() {
+    printf '\nVersion Bump Required\n'
+    printf '=====================\n\n'
 
-        current_version = manifest.get_resource_version(resource_type, resource_name)
+    local header
+    header=$(printf '%-50s  %-20s  %-10s  %-15s' "File" "Resource" "Current" "Status")
+    printf '%s\n' "$header"
+    printf '%*s\n' "${#header}" '' | tr ' ' '='
 
-        if not current_version:
-            files.append({
-                "path": file_path,
-                "platform": platform,
-                "resource_type": resource_type,
-                "resource_name": resource_name,
-                "current_version": "",
-                "status": "error",
-                "error": f"Resource '{resource_name}' not found in {platform} manifest",
-            })
-            continue
+    while IFS= read -r f; do
+        local display_path
+        display_path=$(jq -r '.path' <<< "$f")
+        if (( ${#display_path} > 48 )); then
+            display_path="...${display_path: -45}"
+        fi
+        printf '%-50s  %-20s  %-10s  %-15s\n' \
+            "$display_path" \
+            "$(jq -r '.resource_name' <<< "$f")" \
+            "$(jq -r '.current_version' <<< "$f")" \
+            "$(jq -r '.status' <<< "$f")"
+    done < <(jq -c '.[]' <<< "$FILES_JSON")
 
-        if not validate_semver(current_version):
-            files.append({
-                "path": file_path,
-                "platform": platform,
-                "resource_type": resource_type,
-                "resource_name": resource_name,
-                "current_version": current_version,
-                "status": "error",
-                "error": "Invalid version format",
-            })
-            continue
+    printf '\nRun: mise run version:update\n'
+}
 
-        git_content = get_git_show_content(file_path)
-        if git_content:
-            files.append({
-                "path": file_path,
-                "platform": platform,
-                "resource_type": resource_type,
-                "resource_name": resource_name,
-                "current_version": current_version,
-                "status": "needs_bump",
-                "error": "",
-            })
-        else:
-            files.append({
-                "path": file_path,
-                "platform": platform,
-                "resource_type": resource_type,
-                "resource_name": resource_name,
-                "current_version": current_version,
-                "status": "ok",
-                "error": "",
-            })
+main() {
+    local output_format="table"
+    if [[ "${1:-}" == "--json" ]]; then
+        output_format="json"
+    fi
 
-    for file_path in script_files:
-        current_version = get_script_version_from_file(file_path)
+    local f
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        check_resource_file "$f"
+    done < <(get_staged_files)
 
-        if not current_version:
-            files.append({
-                "path": file_path,
-                "platform": "root",
-                "resource_type": "scripts",
-                "resource_name": Path(file_path).name,
-                "current_version": "",
-                "status": "error",
-                "error": "SCRIPT_VERSION not found",
-            })
-            continue
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        check_script_file "$f"
+    done < <(get_script_files)
 
-        if not validate_semver(current_version):
-            files.append({
-                "path": file_path,
-                "platform": "root",
-                "resource_type": "scripts",
-                "resource_name": Path(file_path).name,
-                "current_version": current_version,
-                "status": "error",
-                "error": "Invalid version format",
-            })
-            continue
+    # Upgrade needs_bump -> needs_{major|minor|patch} by inspecting the diff.
+    local upgraded="[]"
+    while IFS= read -r f; do
+        local status
+        status=$(jq -r '.status' <<< "$f")
+        if [[ "$status" == "needs_bump" ]]; then
+            f=$(upgrade_needs_bump "$f")
+        fi
+        upgraded=$(jq --argjson e "$f" '. + [$e]' <<< "$upgraded")
+    done < <(jq -c '.[]' <<< "$FILES_JSON")
+    FILES_JSON="$upgraded"
 
-        git_content = get_git_show_content(file_path)
-        if git_content:
-            files.append({
-                "path": file_path,
-                "platform": "root",
-                "resource_type": "scripts",
-                "resource_name": Path(file_path).name,
-                "current_version": current_version,
-                "status": "needs_bump",
-                "error": "",
-            })
-        else:
-            files.append({
-                "path": file_path,
-                "platform": "root",
-                "resource_type": "scripts",
-                "resource_name": Path(file_path).name,
-                "current_version": current_version,
-                "status": "ok",
-                "error": "",
-            })
+    local has_error=0
+    while IFS= read -r f; do
+        local s
+        s=$(jq -r '.status' <<< "$f")
+        if [[ "$s" == error* || "$s" == needs_* ]]; then
+            has_error=1
+            break
+        fi
+    done < <(jq -c '.[]' <<< "$FILES_JSON")
 
-    for f in files:
-        if f["status"] == "needs_bump":
-            if f["platform"] == "root":
-                result = detect_bump_for_resource(f["path"])
-            else:
-                result = detect_bump_for_resource(f["path"])
+    local overall_status="ok"
+    [[ $has_error -eq 1 ]] && overall_status="error"
 
-            if result.bump_type in ("patch", "minor", "major"):
-                f["status"] = f"needs_{result.bump_type}"
-            else:
-                f["status"] = "needs_patch"
+    if [[ "$output_format" == "json" ]]; then
+        write_version_state "$overall_status" "$FILES_JSON"
+        jq -n --arg status "$overall_status" --argjson files "$FILES_JSON" \
+            '{status: $status, files: $files}'
+    else
+        write_version_state "$overall_status" "$FILES_JSON"
+        if [[ $has_error -eq 0 ]]; then
+            exit 0
+        fi
+        print_table
+    fi
 
-    has_error = any(1 for f in files if f["status"].startswith("error") or f["status"].startswith("needs_"))
-    status = "error" if has_error else "ok"
+    [[ $has_error -eq 1 ]] && exit 1
+    exit 0
+}
 
-    files_json = json.dumps(files)
-
-    if output_format == "json":
-        write_version_state(status, files_json)
-        print(json.dumps({"status": status, "files": files}))
-    else:
-        write_version_state(status, files_json)
-
-        if not has_error:
-            return
-
-        print("")
-        print("Version Bump Required")
-        print("=====================")
-        print("")
-
-        header = f"{'File':<50}  {'Resource':<20}  {'Current':<10}  {'Status':<15}"
-        print(header)
-        print("=" * len(header))
-
-        for f in files:
-            display_path = f["path"]
-            if len(display_path) > 48:
-                display_path = "..." + display_path[-45:]
-
-            print(f"{display_path:<50}  {f['resource_name']:<20}  {f['current_version']:<10}  {f['status']:<15}")
-
-        print("")
-        print("Run: mise run version:update")
-
-    if has_error:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
+main "$@"

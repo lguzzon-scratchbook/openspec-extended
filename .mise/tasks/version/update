@@ -1,182 +1,189 @@
-#!/usr/bin/env python3
-"""Bump version in manifest for resources needing updates."""
+#!/usr/bin/env bash
+# Bump versions in manifests and source files based on .mise/version-state.json.
+# Run via: mise run version:update
 
-from __future__ import annotations
+set -euo pipefail
 
-import json
-import sys
-from pathlib import Path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/manifest.sh
+source "$SCRIPT_DIR/lib/manifest.sh"
+# shellcheck source=lib/detect.sh
+source "$SCRIPT_DIR/lib/detect.sh"
+# shellcheck source=lib/state.sh
+source "$SCRIPT_DIR/lib/state.sh"
+# shellcheck source=lib/bump.sh
+source "$SCRIPT_DIR/lib/bump.sh"
 
-sys.path.insert(0, str(Path(__file__).parent / "lib"))
+DRY_RUN="false"
+[[ "${1:-}" == "--dry-run" ]] && DRY_RUN="true"
 
-from manifest import (
-    Manifest,
-    bump_semver,
-    highest_bump_type,
-    validate_semver,
-)
-from state import get_state_files, get_state_status
+bump_resource_version() {
+    local platform="$1"
+    local resource_type="$2"
+    local resource_name="$3"
+    local bump_type="$4"
 
+    local manifest
+    manifest=$(manifest_path_for_platform "$platform")
+    if [[ ! -f "$manifest" ]]; then
+        printf 'Error: Manifest not found for platform "%s"\n' "$platform" >&2
+        return 1
+    fi
 
-def get_manifest_file_for_platform(platform: str) -> str:
-    return str(Path(__file__).resolve().parents[3] / "resources" / platform / "manifest.toml")
+    local current_version
+    current_version=$(get_resource_version "$manifest" "$resource_type" "$resource_name" || true)
+    if [[ -z "$current_version" ]]; then
+        printf 'Error: Resource "%s" not found in %s manifest\n' "$resource_name" "$platform" >&2
+        return 1
+    fi
 
+    if ! validate_semver "$current_version"; then
+        return 1
+    fi
 
-def bump_resource_version(platform: str, resource_type: str, resource_name: str, bump_type: str, dry_run: bool = False) -> bool:
-    manifest_path = get_manifest_file_for_platform(platform)
-    manifest_file = Path(manifest_path)
+    local new_version
+    new_version=$(bump_semver "$current_version" "$bump_type")
+    printf '  [%s] %s: %s -> %s\n' "$platform" "$resource_name" "$current_version" "$new_version"
 
-    if not manifest_file.exists():
-        print(f"Error: Manifest not found for platform '{platform}'", file=sys.stderr)
-        return False
+    if [[ "$DRY_RUN" == "true" ]]; then
+        printf '    [DRY-RUN] %s/%s\n' "$resource_type" "$resource_name"
+        return 0
+    fi
 
-    try:
-        manifest = Manifest.load(platform)
-    except Exception as e:
-        print(f"Error: Could not load manifest: {e}", file=sys.stderr)
-        return False
+    set_resource_version "$manifest" "$resource_type" "$resource_name" "$new_version"
+    printf '    OK %s/%s\n' "$resource_type" "$resource_name"
+}
 
-    current_version = manifest.get_resource_version(resource_type, resource_name)
+# Group resource entries by platform+type+name. Echoes "plat:type:name=bump" lines.
+group_resource_bumps() {
+    jq -r '.[] | select(.status | startswith("needs_")) |
+        "\(.platform):\(.resource_type):\(.resource_name)=\(.status | sub("needs_"; ""))"' \
+        <<< "$1"
+}
 
-    if not current_version:
-        print(f"Error: Resource '{resource_name}' not found in {platform} manifest", file=sys.stderr)
-        return False
+group_script_bumps() {
+    jq -r '.[] | select(.status | startswith("needs_")) |
+        select(.platform == "root") |
+        "\(.resource_name)=\(.status | sub("needs_"; ""))"' \
+        <<< "$1"
+}
 
-    if not validate_semver(current_version):
-        return False
+# Merge multiple bump types for the same key into the highest one.
+# Input: lines of "key=bump_type". Output: lines of "key=highest_bump_type".
+dedupe_bumps() {
+    declare -A highest
+    local line key btype
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        key="${line%%=*}"
+        btype="${line#*=}"
+        local current="${highest[$key]:-}"
+        if [[ -z "$current" ]]; then
+            highest[$key]="$btype"
+        else
+            highest[$key]=$(highest_bump_type "$current" "$btype")
+        fi
+    done
+    for key in "${!highest[@]}"; do
+        printf '%s=%s\n' "$key" "${highest[$key]}"
+    done
+}
 
-    new_version = bump_semver(current_version, bump_type)
+main() {
+    local status
+    status=$(get_state_status)
+    if [[ "$status" != "error" ]]; then
+        printf 'No version bumps required (status: %s)\n' "$status"
+        exit 0
+    fi
 
-    print(f"  [{platform}] {resource_name}: {current_version} → {new_version}")
+    local files_json
+    files_json=$(get_state_files)
+    if [[ "$files_json" == "[]" ]]; then
+        printf 'No files in state. Run "mise run version:check" first.\n' >&2
+        exit 1
+    fi
 
-    if dry_run:
-        print(f"    ✓ {resource_type}/{resource_name} (dry-run)")
-        return True
+    local resource_bumps script_bumps
+    resource_bumps=$(group_resource_bumps "$files_json" | dedupe_bumps || true)
+    script_bumps=$(group_script_bumps "$files_json" | dedupe_bumps || true)
 
-    manifest.set_resource_version(resource_type, resource_name, new_version)
-    manifest.save()
-    print(f"    ✓ {resource_type}/{resource_name}")
-    return True
+    if [[ -z "$resource_bumps" && -z "$script_bumps" ]]; then
+        printf 'No version bumps required\n'
+        exit 0
+    fi
 
+    if [[ -n "$resource_bumps" ]]; then
+        printf 'Executing version bumps in manifests:\n\n'
+        local line key btype plat rtype rname
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            key="${line%%=*}"
+            btype="${line#*=}"
+            IFS=':' read -r plat rtype rname <<< "$key"
+            bump_resource_version "$plat" "$rtype" "$rname" "$btype"
+        done <<< "$resource_bumps"
+        printf '\n'
+    fi
 
-def get_script_file_for_name(script_name: str) -> Path | None:
-    project_root = Path(__file__).resolve().parents[3]
-    if script_name == "install.sh":
-        return project_root / "install.sh"
-    elif script_name == "openspecx":
-        return project_root / "bin" / "openspecx"
-    return None
+    if [[ -n "$script_bumps" ]]; then
+        printf 'Executing version bumps in scripts:\n\n'
+        local line key btype new_version=""
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            key="${line%%=*}"
+            btype="${line#*=}"
+            case "$key" in
+                install.sh|source/cli.py)
+                    local file_path="$MANIFEST_PROJECT_ROOT/$key"
+                    if [[ ! -f "$file_path" ]]; then
+                        printf '  Warning: Script not found: %s\n' "$key" >&2
+                        continue
+                    fi
+                    local current_version new_version_for_file
+                    current_version=$(get_script_version_from_file_for_path "$file_path" || true)
+                    if [[ -z "$current_version" ]]; then
+                        printf '  Error: SCRIPT_VERSION not found in %s\n' "$key" >&2
+                        continue
+                    fi
+                    if ! validate_semver "$current_version"; then
+                        continue
+                    fi
+                    new_version_for_file=$(bump_semver "$current_version" "$btype")
+                    printf '  [root] %s: %s -> %s\n' "$key" "$current_version" "$new_version_for_file"
+                    bump_script_version_in_file "$file_path" "$new_version_for_file" "$DRY_RUN"
+                    if [[ "$key" == "source/cli.py" ]]; then
+                        new_version="$new_version_for_file"
+                    fi
+                    ;;
+                *)
+                    printf '  Warning: Unknown script: %s\n' "$key" >&2
+                    ;;
+            esac
+        done <<< "$script_bumps"
 
+        # source/cli.py is the canonical root version: mirror it to
+        # source/__init__.py and pyproject.toml so the three places stay
+        # in lockstep.
+        if [[ -n "$new_version" ]]; then
+            bump_py_init_version "$new_version" "$DRY_RUN"
+            bump_pyproject_version "$new_version" "$DRY_RUN"
+        fi
+        printf '\n'
+    fi
 
-def get_script_version_from_file(file_path: Path) -> str:
-    for line in file_path.read_text().split("\n"):
-        if line.startswith("SCRIPT_VERSION="):
-            return line.split("=", 1)[1].strip().strip('"')
-    return ""
+    printf 'Done. Commit the changes.\n'
+}
 
+# Read SCRIPT_VERSION from a specific file path. This is a small wrapper
+# used only inside this script to keep the local "current_version" lookup
+# explicit.
+get_script_version_from_file_for_path() {
+    local file_path="$1"
+    [[ -f "$file_path" ]] || return 1
+    grep -E '^[[:space:]]*SCRIPT_VERSION[[:space:]]*=' "$file_path" \
+        | head -n1 \
+        | sed -E 's/^[[:space:]]*SCRIPT_VERSION[[:space:]]*=[[:space:]]*"?([^"]*)"?$/\1/'
+}
 
-def bump_script_version_in_file(file_path: Path, new_version: str) -> None:
-    content = file_path.read_text()
-    lines = []
-    for line in content.split("\n"):
-        if line.startswith("SCRIPT_VERSION="):
-            lines.append(f'SCRIPT_VERSION="{new_version}"')
-        else:
-            lines.append(line)
-    file_path.write_text("\n".join(lines) + "\n")
-
-
-def main():
-    dry_run = "--dry-run" in sys.argv
-
-    state_status = get_state_status()
-    if state_status != "error":
-        print(f"No version bumps required (status: {state_status})")
-        sys.exit(0)
-
-    state_files_json = get_state_files()
-    if state_files_json == "[]":
-        print("No files in state. Run 'mise run version:check' first.")
-        sys.exit(1)
-
-    try:
-        state_files = json.loads(state_files_json)
-    except json.JSONDecodeError:
-        print("Invalid state file. Run 'mise run version:check' first.")
-        sys.exit(1)
-
-    resource_bumps = {}
-    script_bumps = {}
-
-    for f in state_files:
-        platform = f.get("platform", "")
-        resource_type = f.get("resource_type", "")
-        resource_name = f.get("resource_name", "")
-        status = f.get("status", "")
-
-        if not platform or not resource_type or not resource_name:
-            continue
-
-        if not status.startswith("needs_"):
-            continue
-
-        bump_type = status.replace("needs_", "")
-
-        if platform == "root" and resource_type == "scripts":
-            script_bumps[resource_name] = bump_type
-        else:
-            resource_key = f"{platform}:{resource_type}:{resource_name}"
-            existing = resource_bumps.get(resource_key)
-            if existing:
-                resource_bumps[resource_key] = highest_bump_type(existing, bump_type)
-            else:
-                resource_bumps[resource_key] = bump_type
-
-    if not resource_bumps and not script_bumps:
-        print("No version bumps required")
-        sys.exit(0)
-
-    if resource_bumps:
-        print("Executing version bumps in manifests:")
-        print("")
-
-        for resource_key, bump_type in resource_bumps.items():
-            platform, resource_type, resource_name = resource_key.split(":", 2)
-            bump_resource_version(platform, resource_type, resource_name, bump_type, dry_run)
-
-        print("")
-
-    if script_bumps:
-        print("Executing version bumps in scripts:")
-        print("")
-
-        for script_name, bump_type in script_bumps.items():
-            script_file = get_script_file_for_name(script_name)
-
-            if not script_file or not script_file.exists():
-                print(f"  Warning: Script not found: {script_name}", file=sys.stderr)
-                continue
-
-            current_version = get_script_version_from_file(script_file)
-
-            if not current_version:
-                print(f"  Error: SCRIPT_VERSION not found in {script_file.name}", file=sys.stderr)
-                continue
-
-            new_version = bump_semver(current_version, bump_type)
-
-            print(f"  [root] {script_name}: {current_version} → {new_version}")
-
-            if dry_run:
-                print(f"    ✓ scripts/{script_name} (dry-run)")
-            else:
-                bump_script_version_in_file(script_file, new_version)
-                print(f"    ✓ scripts/{script_name}")
-
-        print("")
-
-    print("Done. Commit the changes.")
-
-
-if __name__ == "__main__":
-    main()
+main "$@"
