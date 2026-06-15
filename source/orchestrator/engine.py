@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -483,14 +484,32 @@ def run_agent(state: OrchestratorState, phase: str) -> bool:
         ) as agent_log:
             agent_log_path = Path(agent_log.name)
 
+        agent_log_file = open(agent_log_path, "w", buffering=1)
+
         process = subprocess.Popen(
             cmd,
-            stdout=open(agent_log_path, "w"),
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
         )
         state.child_pid = process.pid
+
+        def _stream() -> None:
+            stdout = process.stdout
+            if stdout is None:
+                return
+            with agent_log_file:
+                for line in stdout:
+                    agent_log_file.write(re.sub(r"\x1b\[[0-9;]*m", "", line))
+                    if state.verbose:
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+
+        reader = threading.Thread(target=_stream, daemon=True)
+        reader.start()
         process.wait()
+        reader.join()
         exit_code = process.returncode
         state.child_pid = None
 
