@@ -74,7 +74,7 @@ def get_json_value(json_str, key):
         for k in keys:
             data = data[k]
         return data
-    except json.JSONDecodeError, KeyError, TypeError:
+    except (json.JSONDecodeError, KeyError, TypeError):
         return None
 
 

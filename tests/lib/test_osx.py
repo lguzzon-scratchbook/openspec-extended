@@ -262,9 +262,8 @@ class TestStateGet:
         """Test error when state.json doesn't exist."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        with runner.isolated_filesystem(temp_dir=change_dir.parent.parent.parent):
-            result = runner.invoke(osx.app, ["state", "get", "test-change"])
-            assert result.exit_code != 0
+        result = runner.invoke(osx.app, ["state", "get", "test-change"])
+        assert result.exit_code != 0
 
 
 @pytest.mark.unit
