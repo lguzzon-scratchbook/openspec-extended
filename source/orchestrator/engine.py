@@ -839,6 +839,9 @@ def run_orchestrator(state: Optional[OrchestratorState] = None) -> None:
     if state.log_file:
         state.log_file = Path(state.log_file)
         state.log_user_specified = True
+    else:
+        state.log_file = Path(f".osx-orchestrate-{state.change_id}.log")
+        state.log_user_specified = False
 
     state.start_time = int(datetime.now(timezone.utc).timestamp())
 

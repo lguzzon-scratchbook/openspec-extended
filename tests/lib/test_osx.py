@@ -374,6 +374,112 @@ class TestLog:
         assert result_data["count"] == 0
         assert result_data["entries"] == []
 
+    def test_log_append_rejects_oversized_summary(self, change_dir, monkeypatch):
+        """Shell backtick expansion can dump the whole env into --summary.
+
+        The lib must reject summaries that exceed LOG_TEXT_FIELD_MAX_LENGTH
+        before they reach the JSON file, so the agent gets a clear error
+        and the decision log stays small.
+        """
+        monkeypatch.chdir(change_dir.parent.parent.parent)
+        oversized = "x" * (osx.LOG_TEXT_FIELD_MAX_LENGTH + 1)
+
+        result = runner.invoke(
+            osx.app,
+            [
+                "log",
+                "append",
+                "test-change",
+                "--phase",
+                "ARTIFACT_REVIEW",
+                "--iteration",
+                "1",
+                "--summary",
+                oversized,
+            ],
+        )
+        assert result.exit_code == 1
+        assert "input_too_long" in result.output
+        assert not (change_dir / "decision-log.json").exists()
+
+    def test_log_append_rejects_zsh_env_dump_fingerprint(
+        self, change_dir, monkeypatch
+    ):
+        """`local` backtick-expanded in zsh produces 'integer 10 readonly ...'.
+
+        Any string containing that fingerprint (or the other zsh dump
+        markers) must be rejected with a clear `input_tainted` error
+        rather than written to the decision log.
+        """
+        monkeypatch.chdir(change_dir.parent.parent.parent)
+        tainted = "Reviewed all 4 artifacts. Use the `local` keyword.\n"
+        tainted += "integer 10 readonly !=0\ninteger 10 readonly '#'=0\n"
+        tainted += "BATS_TMPDIR=/tmp\n"
+
+        result = runner.invoke(
+            osx.app,
+            [
+                "log",
+                "append",
+                "test-change",
+                "--phase",
+                "ARTIFACT_REVIEW",
+                "--iteration",
+                "1",
+                "--summary",
+                tainted,
+            ],
+        )
+        assert result.exit_code == 1
+        assert "input_tainted" in result.output
+        assert not (change_dir / "decision-log.json").exists()
+
+    def test_log_append_rejects_oversized_next_steps(self, change_dir, monkeypatch):
+        """--next-steps is also free-text and must be bounded."""
+        monkeypatch.chdir(change_dir.parent.parent.parent)
+        oversized = "y" * (osx.LOG_TEXT_FIELD_MAX_LENGTH + 1)
+
+        result = runner.invoke(
+            osx.app,
+            [
+                "log",
+                "append",
+                "test-change",
+                "--phase",
+                "ARTIFACT_REVIEW",
+                "--iteration",
+                "1",
+                "--next-steps",
+                oversized,
+            ],
+        )
+        assert result.exit_code == 1
+        assert "input_too_long" in result.output
+        assert not (change_dir / "decision-log.json").exists()
+
+    def test_log_append_accepts_normal_summary(self, change_dir, monkeypatch):
+        """Normal-sized summaries (even with apostrophes) must succeed."""
+        monkeypatch.chdir(change_dir.parent.parent.parent)
+
+        result = runner.invoke(
+            osx.app,
+            [
+                "log",
+                "append",
+                "test-change",
+                "--phase",
+                "ARTIFACT_REVIEW",
+                "--iteration",
+                "1",
+                "--summary",
+                "Reviewed all 4 artifacts. Found 0 critical, 1 warning.",
+            ],
+        )
+        assert result.exit_code == 0, (
+            f"Output: {result.output}, Exception: {result.exception}"
+        )
+        assert (change_dir / "decision-log.json").exists()
+
 
 @pytest.mark.unit
 class TestComplete:

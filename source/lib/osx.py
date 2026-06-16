@@ -68,8 +68,18 @@ VALID_TRANSITION_REASONS = [
     "retry_requested",
 ]
 
+LOG_TEXT_FIELD_MAX_LENGTH = 2000
+
+_LOG_FINGERPRINTS = (
+    "integer 10 readonly",
+    "integer 1 readonly",
+    "array readonly",
+    "tied zsh_eval_context",
+)
+
 REQUIRED_SKILLS = [
     "osx-concepts",
+    "osx-workflow",
     "osx-review-artifacts",
     "osx-modify-artifacts",
     "osx-review-test-compliance",
@@ -212,6 +222,39 @@ def read_json_array(path: Path) -> list[Any]:
     except json.JSONDecodeError:
         osx_error("invalid_json", f"Invalid JSON in {path}")
         return []
+
+
+def _validate_log_text_field(field: str, value: str) -> None:
+    """Reject shell-tainted free-text fields in the decision log.
+
+    LLMs occasionally pass markdown backticks (e.g. `local`) inside a shell
+    argument like `--summary "..."`. The user's shell interprets those
+    backticks as command substitution, which can dump the entire shell
+    environment (20KB+) into the decision log. This guard catches that and
+    similar accidents before they reach the JSON file on disk.
+    """
+    if len(value) > LOG_TEXT_FIELD_MAX_LENGTH:
+        raise OSXError(
+            "input_too_long",
+            f"{field} is {len(value)} chars; max is {LOG_TEXT_FIELD_MAX_LENGTH}. "
+            "This usually means backticks in the argument were interpreted as "
+            "command substitution by the shell. Remove backticks from the "
+            f"--{field} value and try again.",
+            field=field,
+            length=len(value),
+            max=LOG_TEXT_FIELD_MAX_LENGTH,
+        )
+    for fingerprint in _LOG_FINGERPRINTS:
+        if fingerprint in value:
+            raise OSXError(
+                "input_tainted",
+                f"{field} contains shell-output fingerprint {fingerprint!r}. "
+                "This means backticks in the argument were interpreted as "
+                "command substitution. Remove backticks from the "
+                f"--{field} value and try again.",
+                field=field,
+                fingerprint=fingerprint,
+            )
 
 
 def _read_json_array(path: Path) -> list[Any]:
@@ -855,6 +898,11 @@ def log_append(
         raise OSXError("missing_field", "phase field is required")
     if "iteration" not in entry:
         raise OSXError("missing_field", "iteration field is required")
+
+    for field in ("summary", "next_steps"):
+        value = entry.get(field)
+        if isinstance(value, str):
+            _validate_log_text_field(field, value)
 
     entries = _read_json_array(log_file)
     entry_num = len(entries) + 1
