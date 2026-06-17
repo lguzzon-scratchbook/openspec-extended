@@ -158,7 +158,7 @@ mise run release patch
 
 Releases are published by the `.github/workflows/release.yml` workflow on
 `vX.Y.Z` tag push. The workflow matrix builds `linux-x86_64`,
-`linux-arm64`, `darwin-x86_64`, and `darwin-arm64`, packages each binary
+`linux-arm64`, and `darwin-arm64`, packages each binary
 into `openspec-extended-v$VERSION-{platform}.tar.gz` (with a `bin/openspec-extended`
 layout), combines per-platform `SHA256SUMS` into a single file, and
 uploads everything to the matching GitHub release.
