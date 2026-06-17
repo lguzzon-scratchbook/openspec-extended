@@ -200,6 +200,11 @@ main() {
                     case "$key" in
                         pyproject.toml)
                             bump_pyproject_version "$new_version_for_file" "$DRY_RUN"
+                            if [[ "$DRY_RUN" != "true" ]]; then
+                                printf '    Syncing uv.lock...\n'
+                                uv lock >/dev/null
+                                printf '    OK uv.lock\n'
+                            fi
                             ;;
                         __init__.py)
                             bump_py_init_version "$new_version_for_file" "$DRY_RUN"

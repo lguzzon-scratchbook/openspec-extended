@@ -71,6 +71,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
   echo "  - pyproject.toml"
   echo "  - source/cli.py (SCRIPT_VERSION)"
   echo "  - source/__init__.py (__version__)"
+  echo "  - uv.lock (sync)"
   echo ""
   echo "[DRY-RUN] Would commit with message: Release version $NEW_VERSION"
   echo "[DRY-RUN] Would create and push tag: $NEW_TAG"
@@ -88,6 +89,15 @@ bump_py_init_version "$NEW_VERSION" "$DRY_RUN"
 echo ""
 echo "Updating version in pyproject.toml:"
 bump_pyproject_version "$NEW_VERSION" "$DRY_RUN"
+echo ""
+
+echo "Syncing uv.lock:"
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "    [DRY-RUN] uv.lock"
+else
+    uv lock
+    echo "    OK uv.lock"
+fi
 echo ""
 
 if ! git diff --quiet; then
