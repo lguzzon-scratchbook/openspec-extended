@@ -62,15 +62,27 @@ console = Console()
 
 ### Versioning
 
-The tool version lives in three synchronized places:
+Two distinct version domains, owned by separate tasks:
+
+**Project version** (owned by `mise run release`):
 - `source/__init__.py` — `__version__`
 - `source/cli.py` — `SCRIPT_VERSION` (alias of `__version__`)
 - `pyproject.toml` — `version`
+- `README.md` — version badge + install example
+- `uv.lock` — synced after `pyproject.toml` bump
+- git tag (`vX.Y.Z`)
 
-`mise run version:update` is the **single source of truth** for these
-three files. The `mise run release` task delegates to `version:update`
-for source-file bumps. Per-resource versions in `resources/*/manifest.toml`
-are bumped independently when skills, agents, or commands change.
+The new version is computed from the latest tag + bump type, written to all
+files in lockstep, then committed and tagged. Run from `main` (override
+with `RELEASE_ALLOW_BRANCH=true`).
+
+**Framework components** (owned by `mise run version:check` / `version:update`):
+- Per-resource versions in `resources/*/manifest.toml` (skills, commands, agents)
+- `install.sh` — independent installer version cycle (separate from project version)
+
+`version:check` is wired as a pre-commit hook (`.pre-commit-config.yaml`)
+and gates staged changes to resource files and `install.sh`. `version:update`
+applies the bumps detected by `version:check`.
 
 ### Testing
 
@@ -188,27 +200,21 @@ license: MIT
 
 ## Version Bumping
 
+Two flows, separate concerns:
+
 ```bash
-# Check what needs bumping (pre-commit hook)
-mise run version:check
-
-# Auto-bump versions in resources/*/manifest.toml, source/cli.py,
-# source/__init__.py, and pyproject.toml
-mise run version:update
-
-# Cut a release: bump version everywhere, commit, tag, push
+# Project release (bumps source/cli.py, source/__init__.py, pyproject.toml,
+# README.md, uv.lock, git tag)
 mise run release patch
+
+# Framework component bumps (bumps resources/*/manifest.toml entries + install.sh)
+mise run version:check       # reports what needs bumping
+mise run version:update      # applies the bumps
 ```
 
-`version:update` is the single source of truth for the three locked
-tool-version fields (`source/cli.py`, `source/__init__.py`, `pyproject.toml`).
-It detects bumps on any of the three and mirrors the highest target to
-the others so they stay in lockstep. The `release` task shares the same
-helpers via `.mise/tasks/version/lib/bump.sh`, so `README.md` is the
-only file the release task updates that `version:update` does not.
-
-`install.sh` tracks its own installer version (`SCRIPT_VERSION`) in the
-`install.sh` file itself, separate from the tool version above.
+Do not edit `SCRIPT_VERSION` / `__version__` / `[project] version` by hand —
+those files are owned by `mise run release` and are intentionally outside
+the scope of `version:check`/`version:update`.
 
 ---
 
