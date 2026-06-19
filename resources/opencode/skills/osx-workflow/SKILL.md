@@ -22,7 +22,7 @@ PHASE5 SELF_REFLECTION → osx-analyzer  → (autonomous reasoning)
 PHASE6 ARCHIVE         → osx-maintainer→ osc-archive-change / osc-bulk-archive-change
 ```
 
-**Tool**: every state mutation goes through the `osx` script at `.opencode/scripts/lib/osx` (one surface; same Python as `source/lib/osx.py`).
+**Tool**: every state mutation goes through the `osx` subcommand: `openspec-extended osx <domain> <action>` (one surface; the CLI wrapper lives in `source/osx_cli.py`, the library in `source/lib/osx.py`).
 
 For the 4 tool layers (`openspec` / `openspec-extended` / `osx` CLI / `osx` lib), see §1 below.
 
@@ -36,12 +36,12 @@ For the 4 tool layers (`openspec` / `openspec-extended` / `osx` CLI / `osx` lib)
 |---|------|------------|----------|
 | 1 | `openspec` (npm) | `openspec <sub>` | Query state, get instructions, validate, list, show |
 | 2 | `openspec-extended` | `openspec-extended <sub>` | Install/update/orchestrate lifecycle |
-| 3 | `osx` (deployed) | `.opencode/scripts/lib/osx` | State I/O from agents (what phase commands use) |
+| 3 | `osx` (CLI subcommand) | `openspec-extended osx …` | State I/O from agents (what phase commands use) |
 | 4 | `osx` (library) | `from source.lib import osx` | In-process callers (the orchestrator) |
 
 > **Why this lives in `osx-workflow`**: the 4 CLI surfaces and the `openspec-extended` subcommands are workflow concerns because the agent running the orchestrator encounters them at runtime.
 
-> **Key**: When the orchestrator dispatches you, you use **layer 3** (the deployed `osx` script). When the user runs a binary, that's **layer 2** (`openspec-extended`). The two share the same Python source.
+> **Key**: When the orchestrator dispatches you, you use **layer 3** (`openspec-extended osx …`). When the user runs a binary, that's **layer 2** (`openspec-extended orchestrate …`). Layers 2 and 3 are the same binary — the CLI subcommand and the orchestrator just route to different entry points.
 >
 > **The `osx` action vocabulary** (which `<dom> <act>` pairs are valid) lives in §4 of this skill — that's the protocol-layer concern. This section covers the layer concept; §4 covers what to actually call.
 
@@ -139,7 +139,7 @@ All live in `openspec/changes/<change>/` (or `openspec/changes/archive/YYYY-MM-D
 
 ## §4 The `osx` tool — full domain/action reference
 
-The `osx` script is at `.opencode/scripts/lib/osx`. Same Python source as `source/lib/osx.py` (the orchestrator calls it in-process; agents call it via the deployed script).
+The `osx` subcommand is `openspec-extended osx <domain> <action>`. Library code lives in `source/lib/osx.py` and is called in-process by the orchestrator; agents call it via the CLI subcommand.
 
 ```bash
 osx <domain> <action> [args]
@@ -149,7 +149,7 @@ Output: JSON to stdout. Errors: JSON to stderr `{"error":"<code>","message":"…
 
 **Canonical verbs**: the only read verb is `get`. The only write verbs are `append`, `complete`, `set-phase`, `transition`, `clear-transition`, `record`, `advance`, and `set` (for `complete`). There is **no** `show`, `list`, or `delete`.
 
-> **Silent aliases accepted by the deployed `osx` CLI** (since `lib.osx 0.1.4`): `show` and `list` are routed to `get`; `set` is routed to `set-phase`; `clear` is routed to `clear-transition`. Error responses still list only the canonical verbs. Prefer canonical forms in scripts and docs.
+> **Silent aliases accepted by the `osx` CLI** (since `lib.osx 0.1.4`): `show` and `list` are routed to `get`; `set` is routed to `set-phase`; `clear` is routed to `clear-transition`. Error responses still list only the canonical verbs. Prefer canonical forms in scripts and docs.
 
 | Domain | Read actions | Write / mutate actions |
 |--------|--------------|------------------------|
@@ -259,11 +259,8 @@ Exit `0` if valid, `1` if invalid.
 ## §5 Invocation
 
 ```bash
-# Primary entry point
+# Run the 7-phase orchestrator
 openspec-extended orchestrate <change> [options]
-
-# Wrapper (deployed copy of engine.py)
-.opencode/scripts/osx-orchestrate <change>
 ```
 
 **Flags** (full reference in `osx-concepts/references/cli-reference.md` §B):
@@ -311,7 +308,7 @@ When the per-phase limit is reached the orchestrator halts and logs to `decision
 When an issue is **unrecoverable** (third-party API down, missing required access, contradictory specs that block all paths), signal:
 
 ```bash
-osx complete set <change> BLOCKED --blocker-reason "Specific reason"
+openspec-extended osx complete set <change> BLOCKED --blocker-reason "Specific reason"
 ```
 
 The orchestrator detects `complete.json` and halts.

@@ -10,7 +10,7 @@ agent: osx-analyzer
 | Tool | Type | Usage |
 |------|------|-------|
 | `openspec` | Upstream CLI | `openspec <command> [options]` - npm package |
-| `osx` | Local script | `.opencode/scripts/lib/osx <domain> <action> [args]` - unified OpenSpec tool |
+| `osx` | Local script | `openspec-extended osx <domain> <action> [args]` - unified OpenSpec tool |
 | Domains: `ctx`, `state`, `iterations`, `log`, `complete`, `validate` |
 
 # PHASE2: Review
@@ -20,7 +20,7 @@ Change: $1
 ## MANDATORY START
 
 1. Load context:
-  !`.opencode/scripts/lib/osx ctx get "$1"`
+  !`openspec-extended osx ctx get "$1"`
 2. Confirm `phase` is PHASE2
 3. Review `history.iterations_recorded` for previous attempts
 4. Load skills: `osx-concepts` and `osx-workflow` (both reference only)
@@ -61,7 +61,7 @@ First, determine the root cause:
 2. Commit the artifact changes
 3. Signal transition back to PHASE1:
    ```bash
-   .opencode/scripts/lib/osx state transition "$1" PHASE1 artifacts_modified "Brief description of what was fixed"
+   openspec-extended osx state transition "$1" PHASE1 artifacts_modified "Brief description of what was fixed"
    ```
 4. Log: "Artifacts modified, transitioning to PHASE1 for re-implementation"
 
@@ -69,14 +69,14 @@ First, determine the root cause:
 1. DO NOT modify artifacts
 2. Signal transition back to PHASE1:
    ```bash
-   .opencode/scripts/lib/osx state transition "$1" PHASE1 implementation_incorrect "Brief description of what needs fixing"
+   openspec-extended osx state transition "$1" PHASE1 implementation_incorrect "Brief description of what needs fixing"
    ```
 3. Log: "Implementation incorrect, transitioning to PHASE1 for fixes"
 
 **Case C: Same phase needs retry with different approach**
 1. Signal retry:
    ```bash
-   .opencode/scripts/lib/osx state transition "$1" PHASE2 retry_requested "Brief description of alternative approach"
+   openspec-extended osx state transition "$1" PHASE2 retry_requested "Brief description of alternative approach"
    ```
 2. Log: "Requesting retry with different approach"
 
@@ -86,7 +86,7 @@ IF NO CRITICAL OR WARNING ISSUES (SUGGESTIONS OK):
 2. Log any SUGGESTION issues for future reference
 3. Mark phase complete via `osx state`:
    ```bash
-   .opencode/scripts/lib/osx state complete "$1"
+   openspec-extended osx state complete "$1"
    ```
 4. Script will advance to PHASE3
 
@@ -137,7 +137,7 @@ IF artifacts were modified during this phase (CRITICAL/WARNING fixes):
 
 Phase complete (verification passed):
 ```bash
-.opencode/scripts/lib/osx state complete "$1"
+openspec-extended osx state complete "$1"
 ```
 
 ## DECISION LOG
@@ -173,7 +173,7 @@ None.
 EOF
 
 # Log with path reference (not inline content)
-.opencode/scripts/lib/osx log append "$1" \
+openspec-extended osx log append "$1" \
   --phase REVIEW \
   --iteration N \
   --summary "Verification results summary" \
@@ -186,7 +186,7 @@ EOF
 
 Append entry:
 ```bash
-.opencode/scripts/lib/osx iterations append "$1" \
+openspec-extended osx iterations append "$1" \
   --phase REVIEW \
   --iteration N \
   --commit-hash "<hash or null>" \

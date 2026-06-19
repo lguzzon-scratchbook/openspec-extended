@@ -16,6 +16,7 @@ from rich.console import Console
 
 from source import __version__
 from source.lib.osx import REQUIRED_CORE_SKILLS
+from source.osx_cli import osx_app
 from source.orchestrator.engine import OrchestratorState, run_orchestrator
 
 SCRIPT_VERSION = "1.0.3"
@@ -30,6 +31,7 @@ app = typer.Typer(
     help=f"{SCRIPT_NAME} - Installer and orchestrator for OpenSpec resources",
     add_completion=False,
 )
+app.add_typer(osx_app, name="osx")
 
 
 def get_resources_dir() -> Path:
@@ -137,10 +139,6 @@ def get_target_path(resource_type: str, target_dir: Path, name: str) -> Path:
         return cmd_path
     elif resource_type == "agents":
         return target_dir / "agents" / f"{name}.md"
-    elif resource_type == "scripts":
-        return target_dir / "scripts" / name
-    elif resource_type == "lib":
-        return target_dir / "scripts" / "lib" / name
     return target_dir / resource_type / name
 
 
@@ -182,27 +180,7 @@ def deploy_agents(source_base: Path, target_dir: Path, name: str) -> None:
     shutil.copy2(source_base / f"{name}.md", target_agents / f"{name}.md")
 
 
-def deploy_scripts(source_base: Path, target_dir: Path, name: str) -> None:
-    target_scripts = target_dir / "scripts"
-    target_scripts.mkdir(parents=True, exist_ok=True)
-    source_name = "engine.py" if name == "osx-orchestrate" else name
-    shutil.copy2(source_base / source_name, target_scripts / name)
-    (target_scripts / name).chmod(0o755)
-
-
-def deploy_lib(source_base: Path, target_dir: Path, name: str) -> None:
-    target_lib = target_dir / "scripts" / "lib"
-    target_lib.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_base / "osx.py", target_lib / name)
-    (target_lib / name).chmod(0o755)
-
-
 def get_source_type_dir(source_dir: Path, resource_type: str) -> Path:
-    project_root = source_dir.parent.parent
-    if resource_type == "scripts":
-        return project_root / "source" / "orchestrator"
-    elif resource_type == "lib":
-        return project_root / "source" / "lib"
     type_map = {
         "skills": "skills",
         "commands": "commands",
@@ -246,8 +224,6 @@ def deploy_type(
                 "skills": deploy_skills,
                 "commands": deploy_commands,
                 "agents": deploy_agents,
-                "scripts": deploy_scripts,
-                "lib": deploy_lib,
             }
             func = deploy_func_map.get(resource_type)
             if func:
@@ -264,10 +240,6 @@ def deploy_type(
             type_label = "command"
         elif resource_type == "agents" and count == 1:
             type_label = "agent"
-        elif resource_type == "scripts" and count == 1:
-            type_label = "script"
-        elif resource_type == "lib" and count == 1:
-            type_label = "lib script"
         log_success(f"Deployed {count} {type_label} to {tool}")
         console.print(f"  Target: {target_dir}/{resource_type}/")
 
@@ -297,7 +269,7 @@ def deploy_all_resources(tool: str, force: bool) -> None:
     total_count = 0
     total_skipped = 0
 
-    for resource_type in ("skills", "commands", "agents", "scripts", "lib"):
+    for resource_type in ("skills", "commands", "agents"):
         cnt, skp = deploy_type(
             resource_type,
             source_dir,
@@ -513,10 +485,6 @@ def validate_deployment(target_dir: Path, manifest: dict) -> None:
                         if subdir.is_dir() and (subdir / f"{base_name}.md").is_file():
                             found = True
                             break
-            elif resource_type == "scripts":
-                found = (target_dir / "scripts" / name).is_file()
-            elif resource_type == "lib":
-                found = (target_dir / "scripts" / "lib" / name).is_file()
 
             if not found:
                 log_warn(f"Resource '{name}' in manifest but not deployed")
@@ -544,8 +512,7 @@ def install(
     target_dir = Path.cwd() / TOOL_DIRS[tool]
     deploy_all_resources(tool, force=False)
 
-    if (target_dir / "scripts" / "osx-orchestrate").is_file():
-        update_gitignore()
+    update_gitignore()
 
     if with_core:
         deploy_core(tool)
@@ -575,8 +542,7 @@ def update(
     target_dir = Path.cwd() / TOOL_DIRS[tool]
     deploy_all_resources(tool, force=True)
 
-    if (target_dir / "scripts" / "osx-orchestrate").is_file():
-        update_gitignore()
+    update_gitignore()
 
     if with_core:
         deploy_core(tool)

@@ -69,7 +69,8 @@ def setup_change(env_dir, change_name, state_data=None):
 def invoke(args):
     """Invoke osx CLI with given args using CliRunner."""
     runner = CliRunner()
-    return runner.invoke(osx.app, args)
+    from source.osx_cli import osx_app
+    return runner.invoke(osx_app, args)
 
 
 @pytest.mark.integration

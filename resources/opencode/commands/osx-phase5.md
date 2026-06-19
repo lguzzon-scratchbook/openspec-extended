@@ -7,7 +7,7 @@ agent: osx-analyzer
 
 | Tool | Usage |
 |------|-------|
-| `osx` | `.opencode/scripts/lib/osx <domain> <action> [args]` - unified OpenSpec tool |
+| `osx` | `openspec-extended osx <domain> <action> [args]` - unified OpenSpec tool |
 | Domains: `ctx`, `state`, `iterations`, `log`, `complete`, `validate` |
 
 # PHASE5: Self-Reflection
@@ -17,7 +17,7 @@ Change: $1
 ## MANDATORY START
 
 1. Load context:
-  !`.opencode/scripts/lib/osx ctx get "$1"`
+  !`openspec-extended osx ctx get "$1"`
 2. Confirm `phase` is PHASE5
 3. Review full history via `osx log get "$1"` to understand entire workflow
 4. Review `history.iterations_recorded` for iteration counts per phase
@@ -108,7 +108,7 @@ cat > "openspec/changes/$1/reflections.md" << 'EOF'
 EOF
 
 # Log with path reference (not inline content)
-.opencode/scripts/lib/osx log append "$1" \
+openspec-extended osx log append "$1" \
   --phase SELF_REFLECTION \
   --iteration N \
   --summary "Self-reflection completed. Workflow evaluation finished." \
@@ -121,7 +121,7 @@ EOF
 
 Append entry:
 ```bash
-.opencode/scripts/lib/osx iterations append "$1" \
+openspec-extended osx iterations append "$1" \
   --phase SELF_REFLECTION \
   --iteration N \
   --commit-hash "<hash or null>" \
@@ -146,7 +146,7 @@ Append entry:
 If you encounter an unrecoverable issue that prevents progress:
 
 ```bash
-.opencode/scripts/lib/osx complete set "$1" BLOCKED --blocker-reason "[Describe the specific blocking issue]"
+openspec-extended osx complete set "$1" BLOCKED --blocker-reason "[Describe the specific blocking issue]"
 ```
 
 The orchestrator will detect this and halt the workflow.

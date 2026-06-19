@@ -25,7 +25,7 @@ Complete reference for the OpenSpec-extended autonomous orchestrator system.
 
 ### 1.1 What Is the Orchestrator?
 
-The orchestrator is the Python engine in `source/orchestrator/engine.py`, exposed via the `openspec-extended orchestrate <change>` command (the entry point users run). A copy is also deployed as `.opencode/scripts/osx-orchestrate` for environments where the binary isn't on `PATH`. The engine manages autonomous implementation of OpenSpec changes through 7 phases:
+The orchestrator is the Python engine in `source/orchestrator/engine.py`, exposed via the `openspec-extended orchestrate <change>` command (the entry point users run). The engine manages autonomous implementation of OpenSpec changes through 7 phases:
 
 ```
 PHASE0: ARTIFACT_REVIEW  → osx-analyzer
@@ -146,11 +146,11 @@ Phase commands instruct agents to "load and use" skills:
 | Review artifacts | `osx-review-artifacts` skill | Read skill file, follow instructions |
 | Modify artifacts | `osx-modify-artifacts` skill | Read skill file, follow instructions |
 | Check status | `openspec` CLI | `openspec status --change "$1" --json` |
-| Orchestration state | `osx` lib tool | `.opencode/scripts/lib/osx <domain> <action>` |
+| Orchestration state | `osx` lib tool | `openspec-extended osx <domain> <action>` |
 
-### 3.3 The `osx` Lib Tool
+### 3.3 The `osx` Subcommand
 
-Location: `.opencode/scripts/lib/osx` (Python script)
+Location: `openspec-extended osx` (CLI subcommand of the `openspec-extended` binary)
 
 **Domains and Actions**:
 
@@ -173,19 +173,19 @@ Location: `.opencode/scripts/lib/osx` (Python script)
 **Examples**:
 ```bash
 # Load context
-.opencode/scripts/lib/osx ctx get "$CHANGE_ID"
+openspec-extended osx ctx get "$CHANGE_ID"
 
 # Mark phase complete
-.opencode/scripts/lib/osx state complete "$CHANGE_ID"
+openspec-extended osx state complete "$CHANGE_ID"
 
 # Record decision
-.opencode/scripts/lib/osx log append "$CHANGE_ID" \
+openspec-extended osx log append "$CHANGE_ID" \
   --phase IMPLEMENTATION \
   --summary "Completed authentication feature" \
   --extra '{"tasks_completed": ["1.1", "1.2"], "commits_made": 3}'
 
 # Signal blocker
-.opencode/scripts/lib/osx complete set "$CHANGE_ID" BLOCKED \
+openspec-extended osx complete set "$CHANGE_ID" BLOCKED \
   --blocker-reason "Third-party API unavailable"
 ```
 
@@ -307,7 +307,7 @@ graph TD
 
 **State update**:
 ```bash
-.opencode/scripts/lib/osx state complete "$1"
+openspec-extended osx state complete "$1"
 ```
 
 ### 5.2 PHASE1: Implementation
@@ -349,16 +349,16 @@ graph TD
 **State updates**:
 ```bash
 # Normal: all good
-.opencode/scripts/lib/osx state complete "$1"
+openspec-extended osx state complete "$1"
 
 # Explicit transition: artifacts wrong
-.opencode/scripts/lib/osx state transition "$1" PHASE1 artifacts_modified "Updated unclear specs"
+openspec-extended osx state transition "$1" PHASE1 artifacts_modified "Updated unclear specs"
 
 # Explicit transition: implementation wrong
-.opencode/scripts/lib/osx state transition "$1" PHASE1 implementation_incorrect "Missing validation"
+openspec-extended osx state transition "$1" PHASE1 implementation_incorrect "Missing validation"
 
 # Explicit transition: retry
-.opencode/scripts/lib/osx state transition "$1" PHASE2 retry_requested "Alternative strategy"
+openspec-extended osx state transition "$1" PHASE2 retry_requested "Alternative strategy"
 ```
 
 ### 5.4 PHASE3: Maintain Documentation
@@ -461,7 +461,7 @@ A blocker is an **unrecoverable issue** that prevents workflow progress.
 ### 6.2 Signaling a Blocker
 
 ```bash
-.opencode/scripts/lib/osx complete set "$CHANGE_ID" BLOCKED \
+openspec-extended osx complete set "$CHANGE_ID" BLOCKED \
   --blocker-reason "Describe the specific blocking issue in detail"
 ```
 
@@ -502,8 +502,6 @@ User can resume workflow from any phase:
 openspec-extended orchestrate "$CHANGE_ID" --from-phase PHASE2
 ```
 
-Or, when the binary is not on `PATH`, the deployed wrapper at `.opencode/scripts/osx-orchestrate` accepts the same arguments.
-
 **Use cases**:
 - Fix blocker in PHASE1, resume from PHASE2
 - Skip exploration after starting change
@@ -539,7 +537,7 @@ Orchestrator enforces limits to prevent infinite loops:
 Always log decisions with context:
 
 ```bash
-.opencode/scripts/lib/osx log append "$1" \
+openspec-extended osx log append "$1" \
   --phase IMPLEMENTATION \
   --iteration 3 \
   --summary "Completed authentication tasks 1.1-1.5" \
@@ -565,7 +563,7 @@ Always log decisions with context:
 
 **Explanation**: `osc-*` are OpenSpec core commands (from npm). `osx` is the extended lib tool for orchestration state.
 
-**Check**: Script path is `.opencode/scripts/lib/osx`, not `.opencode/scripts/lib/osc`.
+**Check**: The invocation is `openspec-extended osx …` (CLI subcommand), not `osc-…` (core OpenSpec commands).
 
 ### 8.2 Skill Invocation Confusion
 

@@ -80,7 +80,7 @@ openspec-extended install opencode --with-core
 ### Verify Installation
 
 ```bash
-ls .opencode/{skills,agents,commands,scripts}/
+ls .opencode/{skills,agents,commands}/
 ```
 
 ## Usage
@@ -135,13 +135,14 @@ ls .opencode/{skills,agents,commands,scripts}/
 # Run autonomous implementation
 openspec-extended orchestrate <change-name>
 
-# Or invoke via the deployed script
-.opencode/scripts/osx-orchestrate <change-name>
-
 # With options
 openspec-extended orchestrate add-auth --max-phase-iterations 20 --verbose
 openspec-extended orchestrate add-auth --from-phase PHASE3
 openspec-extended orchestrate add-auth --dry-run
+
+# Mutate change state directly (what the agents do per iteration)
+openspec-extended osx state complete <change-name>
+openspec-extended osx log append <change-name> --phase PHASE0 --iteration 1 --summary "…"
 ```
 
 ### Options
@@ -177,8 +178,9 @@ After PHASE6 (Archive), files move to `openspec/changes/archive/YYYY-MM-DD-<chan
 ```
 OpenSpec-extended/
 ├── source/                  # Python implementation
-│   ├── cli.py               # Typer CLI (install/update/orchestrate)
-│   ├── lib/osx.py           # Change management tool
+│   ├── cli.py               # Typer CLI (install/update/orchestrate/osx)
+│   ├── lib/osx.py           # Change-management library (pure functions, no CLI)
+│   ├── osx_cli.py           # Typer app for `openspec-extended osx …`
 │   └── orchestrator/
 │       └── engine.py        # 7-phase orchestrator
 ├── install.sh               # Bash binary installer

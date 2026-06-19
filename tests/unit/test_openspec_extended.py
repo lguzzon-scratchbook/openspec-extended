@@ -307,15 +307,3 @@ class TestGetTargetPath:
         target_dir = temp_dir / ".opencode"
         result = get_target_path("agents", target_dir, "osx-test")
         assert result == target_dir / "agents" / "osx-test.md"
-
-    def test_scripts_target_path(self, temp_dir):
-        """Scripts deploy to scripts/<name>."""
-        target_dir = temp_dir / ".opencode"
-        result = get_target_path("scripts", target_dir, "test-script")
-        assert result == target_dir / "scripts" / "test-script"
-
-    def test_lib_target_path(self, temp_dir):
-        """Lib scripts deploy to scripts/lib/<name>."""
-        target_dir = temp_dir / ".opencode"
-        result = get_target_path("lib", target_dir, "test-lib")
-        assert result == target_dir / "scripts" / "lib" / "test-lib"

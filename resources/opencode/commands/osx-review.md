@@ -8,7 +8,7 @@ license: MIT
 | Tool | Type | Usage |
 |------|------|-------|
 | `openspec` | Upstream CLI | `openspec <command> [options]` - npm package |
-| `osx ctx` | Local script | `.opencode/scripts/lib/osx ctx get <change>` - load change context |
+| `osx ctx` | Local script | `openspec-extended osx ctx get <change>` - load change context |
 
 Review OpenSpec artifacts (proposal, design, tasks, specs) for quality and completeness.
 
@@ -40,7 +40,7 @@ Optionally specify `[change-name] [artifact-id]` after `/osx-review`. If omitted
 
 2. **Check status to understand schema** (Optional) 
     ```bash
-    .opencode/scripts/lib/osx ctx get "<name>"
+    openspec-extended osx ctx get "<name>"
     ```
     - Parse JSON for: state (phase, iteration), artifacts with existence info.
     - Bypass if the call returns nothing or an error.

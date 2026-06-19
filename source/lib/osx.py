@@ -1,32 +1,20 @@
 #!/usr/bin/env python3
 """
-osx - OpenSpec Extended change management tool
+osx - OpenSpec Extended change management library
 
-Usage:
-    openspec-extended osx <domain> <action> [args]
+Pure library. Every domain exposes a public function (e.g. `state_get`,
+`phase_advance`, `baseline_record`) that:
 
-Domains:
-    baseline    Baseline tracking (commit/branch)
-    ctx         Aggregate context for a change
-    git         Git status for change directory
-    phase       Phase advancement management
-    state       Phase and iteration state management
-    iterations  Iteration history tracking
-    log         Decision log management
-    complete    Completion status tracking
-    validate    Validation utilities
-    instructions Get artifact instructions (proxies to openspec CLI)
+- Returns a `dict` on success
+- Raises `OSXError(code, message, **context)` on failure
 
-Output: JSON to stdout, errors to stderr
+There is no CLI surface here. The Typer app that exposes these
+functions as `openspec-extended osx <domain> <action>` lives in
+`source/osx_cli.py`.
 
-Library API:
-    Every domain exposes a public library function (e.g. `state_get`,
-    `phase_advance`, `baseline_record`) that returns a dict and raises
-    `OSXError` on failure. The Typer commands above are thin wrappers
-    that catch `OSXError`, call `osx_error` to print, and exit.
-
-    In-process callers (the orchestrator) should import the library
-    functions directly to avoid subprocess overhead and JSON parsing.
+In-process callers (the orchestrator, tests) should import the
+library functions directly to avoid subprocess overhead and JSON
+parsing.
 """
 
 import json
@@ -37,8 +25,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
-
-import typer
 
 PHASES = ["PHASE0", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "PHASE5", "PHASE6"]
 
@@ -96,11 +82,9 @@ REQUIRED_CORE_SKILLS = [
 SKILLS_DIR = Path(".opencode/skills")
 COMMANDS_DIR = Path(".opencode/commands")
 
-app = typer.Typer(help="OpenSpec Extended change management tool")
-
 
 class OSXError(Exception):
-    """Raised by library functions on error. Caught by Typer wrappers."""
+    """Raised by library functions on error. Caught by the CLI wrappers."""
 
     def __init__(self, code: str, message: str, **context) -> None:
         super().__init__(message)
@@ -109,51 +93,11 @@ class OSXError(Exception):
         self.context = context
 
 
-def osx_error(code: str, message: str, **context) -> None:
-    """Print an error JSON to stderr and raise typer.Exit(1).
-
-    Used by the Typer command wrappers and by low-level utilities
-    that need the CLI behavior (print + exit). Library functions
-    should raise `OSXError` instead.
-    """
-    result = {"error": code, "message": message}
-    result.update(context)
-    print(json.dumps(result), file=sys.stderr)
-    raise typer.Exit(1)
-
-
-def osx_output(data: dict) -> None:
-    print(json.dumps(data))
-
-
 def get_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def find_change_dir(change: str) -> Path:
-    """Find a change directory (primary or archived).
-
-    CLI behavior: raises typer.Exit(1) on not found.
-    Library callers should use `_find_change_dir` instead.
-    """
-    primary = Path(f"openspec/changes/{change}")
-    if primary.is_dir():
-        return primary
-
-    archive_dir = Path("openspec/changes/archive")
-    if not archive_dir.is_dir():
-        osx_error("change_not_found", "Change directory does not exist", change=change)
-
-    for d in sorted(archive_dir.iterdir()):
-        if d.is_dir() and d.name.endswith(f"-{change}"):
-            return d
-
-    osx_error("change_not_found", "Change directory does not exist", change=change)
-    raise AssertionError("unreachable")
-
-
 def _find_change_dir(change: str) -> Path:
-    """Library version of find_change_dir: raises OSXError on not found."""
     primary = Path(f"openspec/changes/{change}")
     if primary.is_dir():
         return primary
@@ -171,22 +115,7 @@ def _find_change_dir(change: str) -> Path:
     raise OSXError("change_not_found", "Change directory does not exist", change=change)
 
 
-def read_json(path: Path) -> Any:
-    """Read a JSON file, returning {} if missing.
-
-    CLI behavior: raises typer.Exit(1) on invalid JSON.
-    Library callers should use `_read_json` instead.
-    """
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError:
-        osx_error("invalid_json", f"Invalid JSON in {path}", path=str(path))
-
-
 def _read_json(path: Path) -> Any:
-    """Library version of read_json: raises OSXError on invalid JSON."""
     if not path.exists():
         return {}
     try:
@@ -203,25 +132,6 @@ def write_json(path: Path, data: Any) -> None:
         json.dump(data, f, indent=2)
         f.flush()
         Path(f.name).replace(path)
-
-
-def read_json_array(path: Path) -> list[Any]:
-    """Read a JSON array file, returning [] if missing.
-
-    CLI behavior: raises typer.Exit(1) on error.
-    Library callers should use `_read_json_array` instead.
-    """
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text())
-        if not isinstance(data, list):
-            osx_error("invalid_format", f"{path.name} is not a valid JSON array")
-            return []
-        return data
-    except json.JSONDecodeError:
-        osx_error("invalid_json", f"Invalid JSON in {path}")
-        return []
 
 
 def _validate_log_text_field(field: str, value: str) -> None:
@@ -258,7 +168,6 @@ def _validate_log_text_field(field: str, value: str) -> None:
 
 
 def _read_json_array(path: Path) -> list[Any]:
-    """Library version of read_json_array: raises OSXError on error."""
     if not path.exists():
         return []
     try:
@@ -271,13 +180,13 @@ def _read_json_array(path: Path) -> list[Any]:
 
 
 def append_to_json_array(path: Path, entry: dict) -> int:
-    data = read_json_array(path)
+    data = _read_json_array(path)
     data.append(entry)
     write_json(path, data)
     return len(data)
 
 
-def read_stdin_json() -> Optional[dict]:
+def _read_stdin_json() -> Optional[dict]:
     if sys.stdin.isatty():
         return None
 
@@ -294,8 +203,8 @@ def read_stdin_json() -> Optional[dict]:
         if not content:
             return None
         return json.loads(content)
-    except json.JSONDecodeError:
-        osx_error("invalid_json", "Input is not valid JSON")
+    except json.JSONDecodeError as e:
+        raise OSXError("invalid_json", "Input is not valid JSON") from e
 
 
 def get_next_phase(current: str) -> str:
@@ -805,7 +714,7 @@ def iterations_append(
 
     entry.setdefault("timestamp", get_timestamp())
 
-    total = _append_to_json_array(iterations_file, entry)
+    total = append_to_json_array(iterations_file, entry)
     return {
         "success": True,
         "iteration": entry["iteration"],
@@ -911,7 +820,7 @@ def log_append(
     entry["entry"] = entry_num
     entry["timestamp"] = timestamp
 
-    _append_to_json_array(log_file, entry)
+    append_to_json_array(log_file, entry)
     return {
         "success": True,
         "entry": entry_num,
@@ -1207,372 +1116,3 @@ def validate_completion(target: str) -> dict:
     if errors:
         return {"valid": False, "errors": errors}
     return {"valid": True}
-
-
-# ============================================================
-# Internal helpers used by the library functions
-# ============================================================
-
-
-def _read_stdin_json() -> Optional[dict]:
-    """Library version of read_stdin_json: raises OSXError on error."""
-    if sys.stdin.isatty():
-        return None
-
-    if hasattr(select, "select"):
-        try:
-            has_data, _, _ = select.select([sys.stdin], [], [], 0)
-            if not has_data:
-                return None
-        except (ValueError, OSError):
-            return None
-
-    try:
-        content = sys.stdin.read().strip()
-        if not content:
-            return None
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        raise OSXError("invalid_json", "Input is not valid JSON") from e
-
-
-def _append_to_json_array(path: Path, entry: dict) -> int:
-    data = _read_json_array(path)
-    data.append(entry)
-    write_json(path, data)
-    return len(data)
-
-
-def instructions(
-    artifact: str, change: Optional[str] = None, json_output: bool = False
-) -> None:
-    cmd_args = ["openspec", "instructions", artifact]
-    if change:
-        cmd_args.extend(["--change", change])
-    if json_output:
-        cmd_args.append("--json")
-
-    try:
-        result = subprocess.run(cmd_args, capture_output=True, text=True)
-        print(result.stdout, end="")
-        if result.returncode != 0:
-            print(result.stderr, file=sys.stderr, end="")
-            raise typer.Exit(result.returncode)
-    except FileNotFoundError as e:
-        raise OSXError("cli_not_found", "openspec CLI not found in PATH") from e
-
-
-# ============================================================
-# Typer command wrappers: thin layer that calls library functions
-# and prints their result. Used for `python -m source.lib.osx ...`
-# and `typer.testing.CliRunner.invoke(osx.app, ...)`.
-# ============================================================
-
-
-def _print_or_exit(data: dict) -> None:
-    """Print the dict and exit 1 if it indicates failure."""
-    osx_output(data)
-    if data.get("valid") is False:
-        raise typer.Exit(1)
-    if data.get("error"):
-        raise typer.Exit(1)
-
-
-def _call_library(fn, *args, **kwargs):
-    """Call a library function, catching OSXError and re-raising as osx_error."""
-    try:
-        return fn(*args, **kwargs)
-    except OSXError as e:
-        osx_error(e.code, e.message, **e.context)
-
-
-@app.command(name="baseline")
-def baseline_cmd(
-    action: str = typer.Argument(..., help="Action: record, get"),
-) -> None:
-    if action == "record":
-        data = _call_library(baseline_record)
-    elif action == "get" or action == "show":
-        data = _call_library(baseline_get)
-    else:
-        osx_error("invalid_action", f"Unknown action: {action}", valid="record, get")
-        return
-    osx_output(data)
-
-
-@app.command(name="ctx")
-def ctx_cmd(
-    action: str = typer.Argument(..., help="Action: get"),
-    change: str = typer.Argument(..., help="Change name"),
-) -> None:
-    if action == "get" or action == "show":
-        data = _call_library(ctx_get, change)
-    else:
-        osx_error("invalid_action", f"Unknown action: {action}", valid="get")
-        return
-    osx_output(data)
-
-
-@app.command(name="git")
-def git_cmd(
-    action: str = typer.Argument(..., help="Action: get"),
-    change: str = typer.Argument(..., help="Change name"),
-) -> None:
-    if action == "get" or action == "show":
-        data = _call_library(git_get, change)
-    else:
-        osx_error("invalid_action", f"Unknown action: {action}", valid="get")
-        return
-    osx_output(data)
-
-
-@app.command(name="phase")
-def phase_cmd(
-    action: str = typer.Argument(..., help="Action: current, next, advance"),
-    change: str = typer.Argument(..., help="Change name"),
-) -> None:
-    if action == "current":
-        data = _call_library(phase_current, change)
-    elif action == "next":
-        data = _call_library(phase_next, change)
-    elif action == "advance":
-        data = _call_library(phase_advance, change)
-    else:
-        osx_error(
-            "invalid_action",
-            f"Unknown action: {action}",
-            valid="current, next, advance",
-        )
-        return
-    osx_output(data)
-
-
-@app.command(name="state")
-def state_cmd(
-    action: str = typer.Argument(
-        ..., help="Action: get, complete, transition, clear-transition, set-phase"
-    ),
-    change: str = typer.Argument(..., help="Change name"),
-    phase: Optional[str] = typer.Argument(None, help="Phase (for set-phase)"),
-    target: Optional[str] = typer.Argument(None, help="Target phase (for transition)"),
-    reason: Optional[str] = typer.Argument(
-        None, help="Transition reason (for transition)"
-    ),
-    details: Optional[str] = typer.Argument(
-        None, help="Transition details (for transition)"
-    ),
-    iteration: Optional[int] = typer.Option(
-        None, "--iteration", help="Iteration number"
-    ),
-) -> None:
-    if action == "get" or action == "show":
-        data = _call_library(state_get, change)
-    elif action == "complete":
-        data = _call_library(state_complete, change)
-    elif action == "transition":
-        data = _call_library(state_transition, change, target, reason, details)
-    elif action == "clear-transition" or action == "clear":
-        data = _call_library(state_clear_transition, change)
-    elif action == "set-phase" or action == "set":
-        data = _call_library(state_set_phase, change, phase, iteration)
-    else:
-        osx_error(
-            "invalid_action",
-            f"Unknown action: {action}",
-            valid="get, complete, transition, clear-transition, set-phase",
-        )
-        return
-    osx_output(data)
-
-
-@app.command(name="iterations")
-def iterations_cmd(
-    action: str = typer.Argument(..., help="Action: get, append"),
-    change: str = typer.Argument(..., help="Change name"),
-    phase: Optional[str] = typer.Option(None, "--phase", help="Phase"),
-    iteration: Optional[int] = typer.Option(
-        None, "--iteration", help="Iteration number"
-    ),
-    summary: Optional[str] = typer.Option(None, "--summary", help="Summary text"),
-    status: Optional[str] = typer.Option(None, "--status", help="Status"),
-    notes: Optional[str] = typer.Option(None, "--notes", help="Notes"),
-    commit_hash: Optional[str] = typer.Option(
-        None, "--commit-hash", help="Git commit hash"
-    ),
-    issues: Optional[str] = typer.Option(None, "--issues", help="Issues (JSON)"),
-    artifacts_modified: Optional[str] = typer.Option(
-        None, "--artifacts-modified", help="Artifacts modified (JSON)"
-    ),
-    decisions: Optional[str] = typer.Option(
-        None, "--decisions", help="Decisions (JSON)"
-    ),
-    errors: Optional[str] = typer.Option(None, "--errors", help="Errors (JSON)"),
-    extra: Optional[str] = typer.Option(
-        None, "--extra", help="Additional fields (JSON object)"
-    ),
-) -> None:
-    if action == "get" or action == "show" or action == "list":
-        data = _call_library(iterations_get, change)
-    elif action == "append":
-        data = _call_library(
-            iterations_append,
-            change,
-            iteration=iteration,
-            phase=phase,
-            summary=summary,
-            status=status,
-            notes=notes,
-            commit_hash=commit_hash,
-            issues=issues,
-            artifacts_modified=artifacts_modified,
-            decisions=decisions,
-            errors=errors,
-            extra=extra,
-        )
-    else:
-        osx_error("invalid_action", f"Unknown action: {action}", valid="get, append")
-        return
-    osx_output(data)
-
-
-@app.command(name="log")
-def log_cmd(
-    action: str = typer.Argument(..., help="Action: get, append"),
-    change: str = typer.Argument(..., help="Change name"),
-    phase: Optional[str] = typer.Option(None, "--phase", help="Phase"),
-    iteration: Optional[int] = typer.Option(
-        None, "--iteration", help="Iteration number"
-    ),
-    summary: Optional[str] = typer.Option(None, "--summary", help="Summary text"),
-    commit_hash: Optional[str] = typer.Option(
-        None, "--commit-hash", help="Git commit hash"
-    ),
-    next_steps: Optional[str] = typer.Option(None, "--next-steps", help="Next steps"),
-    issues: Optional[str] = typer.Option(None, "--issues", help="Issues (JSON)"),
-    artifacts_modified: Optional[str] = typer.Option(
-        None, "--artifacts-modified", help="Artifacts modified (JSON)"
-    ),
-    decisions: Optional[str] = typer.Option(
-        None, "--decisions", help="Decisions (JSON)"
-    ),
-    errors: Optional[str] = typer.Option(None, "--errors", help="Errors (JSON)"),
-    extra: Optional[str] = typer.Option(
-        None, "--extra", help="Additional fields (JSON object)"
-    ),
-) -> None:
-    if action == "get" or action == "show" or action == "list":
-        data = _call_library(log_get, change)
-    elif action == "append":
-        data = _call_library(
-            log_append,
-            change,
-            phase=phase,
-            iteration=iteration,
-            summary=summary,
-            commit_hash=commit_hash,
-            next_steps=next_steps,
-            issues=issues,
-            artifacts_modified=artifacts_modified,
-            decisions=decisions,
-            errors=errors,
-            extra=extra,
-        )
-    else:
-        osx_error("invalid_action", f"Unknown action: {action}", valid="get, append")
-        return
-    osx_output(data)
-
-
-@app.command(name="complete")
-def complete_cmd(
-    action: str = typer.Argument(..., help="Action: check, get, set"),
-    change: str = typer.Argument(..., help="Change name"),
-    status: Optional[str] = typer.Argument(None, help="Status (COMPLETE or BLOCKED)"),
-    blocker_reason: Optional[str] = typer.Option(
-        None, "--blocker-reason", help="Blocker reason"
-    ),
-) -> None:
-    if action == "check":
-        data = _call_library(complete_check, change)
-        osx_output(data)
-        if not data.get("exists", False):
-            raise typer.Exit(1)
-    elif action == "get":
-        data = _call_library(complete_get, change)
-        osx_output(data)
-    elif action == "set":
-        data = _call_library(complete_set, change, status, blocker_reason)
-        osx_output(data)
-    else:
-        osx_error(
-            "invalid_action", f"Unknown action: {action}", valid="check, get, set"
-        )
-        return
-
-
-@app.command(name="validate")
-def validate_cmd(
-    action: str = typer.Argument(
-        ...,
-        help="Action: json, skills, commands, change-dir, archive, iterations, completion",
-    ),
-    target: Optional[str] = typer.Argument(
-        None, help="Target (file path or change name depending on action)"
-    ),
-) -> None:
-    if action == "json":
-        if target is None:
-            osx_error("missing_field", "file path required for json validation")
-            return
-        data = validate_json(target)
-    elif action == "skills":
-        data = validate_skills()
-    elif action == "commands":
-        data = validate_commands()
-    elif action == "change-dir":
-        if target is None:
-            osx_error("missing_field", "change name required for change-dir validation")
-            return
-        data = validate_change_dir(target)
-    elif action == "archive":
-        if target is None:
-            osx_error("missing_field", "change name required for archive validation")
-            return
-        data = validate_archive(target)
-    elif action == "iterations":
-        if target is None:
-            osx_error("missing_field", "change name required for iterations validation")
-            return
-        data = validate_iterations(target)
-    elif action == "completion":
-        if target is None:
-            osx_error("missing_field", "change name required for completion validation")
-            return
-        data = validate_completion(target)
-    else:
-        osx_error(
-            "invalid_action",
-            f"Unknown action: {action}",
-            valid="json, skills, commands, change-dir, archive, iterations, completion",
-        )
-        return
-
-    osx_output(data)
-    if data.get("valid") is False:
-        raise typer.Exit(1)
-
-
-@app.command(name="instructions")
-def instructions_cmd(
-    artifact: str = typer.Argument(..., help="Artifact type (e.g., specs, apply)"),
-    change: Optional[str] = typer.Option(None, "--change", help="Change name"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-) -> None:
-    try:
-        instructions(artifact, change, json_output)
-    except OSXError as e:
-        osx_error(e.code, e.message, **e.context)
-
-
-if __name__ == "__main__":
-    app()

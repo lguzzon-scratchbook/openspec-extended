@@ -8,7 +8,7 @@ agent: osx-builder
 | Tool | Type | Usage |
 |------|------|-------|
 | `openspec` | Upstream CLI | `openspec <command> [options]` - npm package |
-| `osx` | Local script | `.opencode/scripts/lib/osx <domain> <action> [args]` - unified OpenSpec tool |
+| `osx` | Local script | `openspec-extended osx <domain> <action> [args]` - unified OpenSpec tool |
 | Domains: `ctx`, `state`, `iterations`, `log`, `complete`, `validate` |
 
 # PHASE1: Implementation
@@ -18,7 +18,7 @@ Change: $1
 ## MANDATORY START
 
 1. Load context:
-  !`.opencode/scripts/lib/osx ctx get "$1"`
+  !`openspec-extended osx ctx get "$1"`
 2. Confirm `phase` is PHASE1
 3. Review `history.iterations_recorded` for previous attempts
 4. Load skills: `osx-concepts` and `osx-workflow` (both reference only)
@@ -108,7 +108,7 @@ After implementation complete:
 If you encounter an unrecoverable issue that prevents progress:
 
 ```bash
-.opencode/scripts/lib/osx complete set "$1" BLOCKED --blocker-reason "[Describe the specific blocking issue]"
+openspec-extended osx complete set "$1" BLOCKED --blocker-reason "[Describe the specific blocking issue]"
 ```
 
 The orchestrator will detect this and halt the workflow.
@@ -123,14 +123,14 @@ The orchestrator will detect this and halt the workflow.
 
 When all tasks are complete:
 ```bash
-.opencode/scripts/lib/osx state complete "$1"
+openspec-extended osx state complete "$1"
 ```
 
 ## DECISION LOG
 
 Append entry:
 ```bash
-.opencode/scripts/lib/osx log append "$1" \
+openspec-extended osx log append "$1" \
   --phase IMPLEMENTATION \
   --iteration N \
   --summary "What was accomplished this iteration" \
@@ -143,7 +143,7 @@ Append entry:
 
 Append entry:
 ```bash
-.opencode/scripts/lib/osx iterations append "$1" \
+openspec-extended osx iterations append "$1" \
   --phase IMPLEMENTATION \
   --iteration N \
   --notes "Brief summary" \

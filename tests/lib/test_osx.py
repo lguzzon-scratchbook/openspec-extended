@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Unit tests for the osx (OpenSpec-extended) tool.
+Unit tests for the osx library (source.lib.osx) and its CLI surface
+(source.osx_cli).
 
-Tests all 7 domains: ctx, git, state, iterations, log, complete, validate
+The library is tested in-process by importing and calling functions
+directly. The CLI is tested by invoking `osx_cli.osx_app` via
+CliRunner.
 """
 
 import json
-import sys
-import io
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-import typer
 from typer.testing import CliRunner
 
 from source.lib import osx
+from source.osx_cli import osx_app
 
 runner = CliRunner()
 
@@ -50,21 +51,14 @@ def change_dir_with_specs(tmp_path):
     return change_path
 
 
-def run_cmd(args, cwd=None):
-    """Run osx command via CliRunner and return result."""
-    with runner.isolated_filesystem(temp_dir=cwd) as f:
-        result = runner.invoke(osx.app, args)
-        return result
-
-
 @pytest.mark.unit
 class TestFindChangeDir:
-    """Tests for find_change_dir function."""
+    """Tests for the library _find_change_dir function (raises OSXError)."""
 
     def test_primary_location(self, change_dir, monkeypatch):
         """Test finding change in primary location."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
-        result = osx.find_change_dir("test-change")
+        result = osx._find_change_dir("test-change")
         assert result.resolve() == change_dir.resolve()
 
     def test_archived_location(self, tmp_path, monkeypatch):
@@ -72,7 +66,7 @@ class TestFindChangeDir:
         archive_path = tmp_path / "openspec/changes/archive/2024-01-15-test-change"
         archive_path.mkdir(parents=True)
         monkeypatch.chdir(tmp_path)
-        result = osx.find_change_dir("test-change")
+        result = osx._find_change_dir("test-change")
         assert result.name == "2024-01-15-test-change"
         assert "archive" in str(result)
 
@@ -81,19 +75,16 @@ class TestFindChangeDir:
     ):
         """Test that primary location takes precedence over archived."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
-        result = osx.find_change_dir("test-change")
+        result = osx._find_change_dir("test-change")
         assert result.resolve() == change_dir.resolve()
 
-    def test_not_found(self, tmp_path, monkeypatch, capsys):
+    def test_not_found(self, tmp_path, monkeypatch):
         """Test error when change not found."""
         monkeypatch.chdir(tmp_path)
-        with pytest.raises(typer.Exit) as exc_info:
-            osx.find_change_dir("nonexistent")
-        assert exc_info.value.exit_code == 1
-        captured = capsys.readouterr()
-        result = json.loads(captured.err)
-        assert result["error"] == "change_not_found"
-        assert "nonexistent" in result["change"]
+        with pytest.raises(osx.OSXError) as exc_info:
+            osx._find_change_dir("nonexistent")
+        assert exc_info.value.code == "change_not_found"
+        assert exc_info.value.context["change"] == "nonexistent"
 
     def test_multiple_archived_matches(self, tmp_path, monkeypatch):
         """Test that first archived match is returned when multiple exist."""
@@ -104,54 +95,34 @@ class TestFindChangeDir:
         archived2 = archive_dir / "2024-01-15-test-change"
         archived1.mkdir()
         archived2.mkdir()
-        result = osx.find_change_dir("test-change")
+        result = osx._find_change_dir("test-change")
         assert result.name.endswith("-test-change")
 
 
 @pytest.mark.unit
-class TestUtilityFunctions:
-    """Tests for utility functions."""
-
-    def test_output(self, capsys):
-        """Test JSON output to stdout."""
-        osx.osx_output({"test": "value", "number": 42})
-        captured = capsys.readouterr()
-        result = json.loads(captured.out)
-        assert result == {"test": "value", "number": 42}
-
-    def test_error(self, capsys):
-        """Test error output to stderr."""
-        with pytest.raises(typer.Exit) as exc_info:
-            osx.osx_error("test_error", "Test message", extra="data")
-        assert exc_info.value.exit_code == 1
-        captured = capsys.readouterr()
-        result = json.loads(captured.err)
-        assert result["error"] == "test_error"
-        assert result["message"] == "Test message"
-        assert result["extra"] == "data"
+class TestLibraryIO:
+    """Tests for library IO helpers (_read_json, _read_json_array, write_json)."""
 
     def test_read_json_existing(self, tmp_path):
         """Test reading existing JSON file."""
         json_file = tmp_path / "test.json"
         json_file.write_text('{"key": "value"}')
-        result = osx.read_json(json_file)
+        result = osx._read_json(json_file)
         assert result == {"key": "value"}
 
     def test_read_json_not_found(self, tmp_path):
         """Test reading non-existent JSON file returns empty dict."""
         json_file = tmp_path / "nonexistent.json"
-        result = osx.read_json(json_file)
+        result = osx._read_json(json_file)
         assert result == {}
 
-    def test_read_json_invalid(self, tmp_path, capsys):
-        """Test reading invalid JSON file."""
+    def test_read_json_invalid(self, tmp_path):
+        """Test reading invalid JSON file raises OSXError."""
         json_file = tmp_path / "invalid.json"
         json_file.write_text("not valid json")
-        with pytest.raises(typer.Exit):
-            osx.read_json(json_file)
-        captured = capsys.readouterr()
-        result = json.loads(captured.err)
-        assert result["error"] == "invalid_json"
+        with pytest.raises(osx.OSXError) as exc_info:
+            osx._read_json(json_file)
+        assert exc_info.value.code == "invalid_json"
 
     def test_write_json(self, tmp_path):
         """Test writing JSON file."""
@@ -171,24 +142,22 @@ class TestUtilityFunctions:
         """Test reading existing JSON array file."""
         json_file = tmp_path / "array.json"
         json_file.write_text('[{"id": 1}, {"id": 2}]')
-        result = osx.read_json_array(json_file)
+        result = osx._read_json_array(json_file)
         assert result == [{"id": 1}, {"id": 2}]
 
     def test_read_json_array_not_found(self, tmp_path):
         """Test reading non-existent JSON array returns empty list."""
         json_file = tmp_path / "nonexistent.json"
-        result = osx.read_json_array(json_file)
+        result = osx._read_json_array(json_file)
         assert result == []
 
-    def test_read_json_array_invalid_format(self, tmp_path, capsys):
+    def test_read_json_array_invalid_format(self, tmp_path):
         """Test error when JSON file is not an array."""
         json_file = tmp_path / "not_array.json"
         json_file.write_text('{"key": "value"}')
-        with pytest.raises(typer.Exit):
-            osx.read_json_array(json_file)
-        captured = capsys.readouterr()
-        result = json.loads(captured.err)
-        assert result["error"] == "invalid_format"
+        with pytest.raises(osx.OSXError) as exc_info:
+            osx._read_json_array(json_file)
+        assert exc_info.value.code == "invalid_format"
 
     def test_append_to_json_array(self, tmp_path):
         """Test appending entry to JSON array."""
@@ -215,12 +184,12 @@ class TestUtilityFunctions:
 class TestStateGet:
     """Tests for state get command."""
 
-    def test_get_state(self, change_dir, monkeypatch, capsys):
+    def test_get_state(self, change_dir, monkeypatch):
         """Test getting state."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text('{"phase": "PHASE1", "iteration": 2}')
 
-        result = runner.invoke(osx.app, ["state", "get", "test-change"])
+        result = runner.invoke(osx_app, ["state", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -230,26 +199,26 @@ class TestStateGet:
         assert result_data["phase_complete"] == False
         assert result_data["change"] == "test-change"
 
-    def test_get_state_with_phase_complete(self, change_dir, monkeypatch, capsys):
+    def test_get_state_with_phase_complete(self, change_dir, monkeypatch):
         """Test getting state with phase_complete set."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text(
             '{"phase": "PHASE2", "iteration": 3, "phase_complete": true}'
         )
 
-        result = runner.invoke(osx.app, ["state", "get", "test-change"])
+        result = runner.invoke(osx_app, ["state", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
         result_data = json.loads(result.output)
         assert result_data["phase_complete"] == True
 
-    def test_get_state_defaults(self, change_dir, monkeypatch, capsys):
+    def test_get_state_defaults(self, change_dir, monkeypatch):
         """Test getting state with missing fields uses defaults."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text("{}")
 
-        result = runner.invoke(osx.app, ["state", "get", "test-change"])
+        result = runner.invoke(osx_app, ["state", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -258,11 +227,11 @@ class TestStateGet:
         assert result_data["iteration"] == 0
         assert result_data["phase_complete"] == False
 
-    def test_get_state_not_found(self, change_dir, monkeypatch, capsys):
+    def test_get_state_not_found(self, change_dir, monkeypatch):
         """Test error when state.json doesn't exist."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        result = runner.invoke(osx.app, ["state", "get", "test-change"])
+        result = runner.invoke(osx_app, ["state", "get", "test-change"])
         assert result.exit_code != 0
 
 
@@ -270,12 +239,12 @@ class TestStateGet:
 class TestPhase:
     """Tests for phase command."""
 
-    def test_phase_current(self, change_dir, monkeypatch, capsys):
+    def test_phase_current(self, change_dir, monkeypatch):
         """Test getting current phase."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text('{"phase": "PHASE2", "iteration": 3}')
 
-        result = runner.invoke(osx.app, ["phase", "current", "test-change"])
+        result = runner.invoke(osx_app, ["phase", "current", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -284,24 +253,24 @@ class TestPhase:
         assert result_data["next"] == "PHASE3"
         assert result_data["iteration"] == 3
 
-    def test_phase_next(self, change_dir, monkeypatch, capsys):
+    def test_phase_next(self, change_dir, monkeypatch):
         """Test getting next phase."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text('{"phase": "PHASE1"}')
 
-        result = runner.invoke(osx.app, ["phase", "next", "test-change"])
+        result = runner.invoke(osx_app, ["phase", "next", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
         result_data = json.loads(result.output)
         assert result_data["next"] == "PHASE2"
 
-    def test_phase_advance(self, change_dir, monkeypatch, capsys):
+    def test_phase_advance(self, change_dir, monkeypatch):
         """Test advancing to next phase."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text('{"phase": "PHASE0", "iteration": 1}')
 
-        result = runner.invoke(osx.app, ["phase", "advance", "test-change"])
+        result = runner.invoke(osx_app, ["phase", "advance", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -320,11 +289,11 @@ class TestPhase:
 class TestIterations:
     """Tests for iterations command."""
 
-    def test_iterations_get_empty(self, change_dir, monkeypatch, capsys):
+    def test_iterations_get_empty(self, change_dir, monkeypatch):
         """Test getting iterations when none exist."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        result = runner.invoke(osx.app, ["iterations", "get", "test-change"])
+        result = runner.invoke(osx_app, ["iterations", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -332,12 +301,12 @@ class TestIterations:
         assert result_data["count"] == 0
         assert result_data["iterations"] == []
 
-    def test_iterations_append(self, change_dir, monkeypatch, capsys):
+    def test_iterations_append(self, change_dir, monkeypatch):
         """Test appending iteration."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
         result = runner.invoke(
-            osx.app,
+            osx_app,
             [
                 "iterations",
                 "append",
@@ -362,11 +331,11 @@ class TestIterations:
 class TestLog:
     """Tests for log command."""
 
-    def test_log_get_empty(self, change_dir, monkeypatch, capsys):
+    def test_log_get_empty(self, change_dir, monkeypatch):
         """Test getting log when empty."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        result = runner.invoke(osx.app, ["log", "get", "test-change"])
+        result = runner.invoke(osx_app, ["log", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -385,7 +354,7 @@ class TestLog:
         oversized = "x" * (osx.LOG_TEXT_FIELD_MAX_LENGTH + 1)
 
         result = runner.invoke(
-            osx.app,
+            osx_app,
             [
                 "log",
                 "append",
@@ -417,7 +386,7 @@ class TestLog:
         tainted += "BATS_TMPDIR=/tmp\n"
 
         result = runner.invoke(
-            osx.app,
+            osx_app,
             [
                 "log",
                 "append",
@@ -440,7 +409,7 @@ class TestLog:
         oversized = "y" * (osx.LOG_TEXT_FIELD_MAX_LENGTH + 1)
 
         result = runner.invoke(
-            osx.app,
+            osx_app,
             [
                 "log",
                 "append",
@@ -462,7 +431,7 @@ class TestLog:
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
         result = runner.invoke(
-            osx.app,
+            osx_app,
             [
                 "log",
                 "append",
@@ -485,30 +454,32 @@ class TestLog:
 class TestComplete:
     """Tests for complete command."""
 
-    def test_complete_check_exists(self, change_dir, monkeypatch, capsys):
+    def test_complete_check_exists(self, change_dir, monkeypatch):
         """Test checking when complete.json exists."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "complete.json").write_text('{"status": "COMPLETE"}')
 
-        result = runner.invoke(osx.app, ["complete", "check", "test-change"])
+        result = runner.invoke(osx_app, ["complete", "check", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
         result_data = json.loads(result.output)
         assert result_data["exists"] == True
 
-    def test_complete_check_not_exists(self, change_dir, monkeypatch, capsys):
+    def test_complete_check_not_exists(self, change_dir, monkeypatch):
         """Test checking when complete.json doesn't exist."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        result = runner.invoke(osx.app, ["complete", "check", "test-change"])
+        result = runner.invoke(osx_app, ["complete", "check", "test-change"])
         assert result.exit_code == 1
 
-    def test_complete_set(self, change_dir, monkeypatch, capsys):
+    def test_complete_set(self, change_dir, monkeypatch):
         """Test setting complete status."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        result = runner.invoke(osx.app, ["complete", "set", "test-change", "COMPLETE"])
+        result = runner.invoke(
+            osx_app, ["complete", "set", "test-change", "COMPLETE"]
+        )
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -521,14 +492,14 @@ class TestComplete:
 class TestCtx:
     """Tests for ctx command."""
 
-    def test_ctx_get_basic(self, change_dir, monkeypatch, capsys):
+    def test_ctx_get_basic(self, change_dir, monkeypatch):
         """Test getting basic context."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
         (change_dir / "state.json").write_text(
             '{"phase": "PHASE1", "iteration": 2, "phase_complete": false}'
         )
 
-        result = runner.invoke(osx.app, ["ctx", "get", "test-change"])
+        result = runner.invoke(osx_app, ["ctx", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -544,11 +515,11 @@ class TestCtx:
 class TestGit:
     """Tests for git command."""
 
-    def test_git_get_clean(self, change_dir, monkeypatch, capsys):
+    def test_git_get_clean(self, change_dir, monkeypatch):
         """Test getting git status when clean."""
         monkeypatch.chdir(change_dir.parent.parent.parent)
 
-        result = runner.invoke(osx.app, ["git", "get", "test-change"])
+        result = runner.invoke(osx_app, ["git", "get", "test-change"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -563,29 +534,29 @@ class TestGit:
 class TestValidate:
     """Tests for validate command."""
 
-    def test_validate_json_valid(self, tmp_path, monkeypatch, capsys):
+    def test_validate_json_valid(self, tmp_path, monkeypatch):
         """Test validating valid JSON file."""
         json_file = tmp_path / "valid.json"
         json_file.write_text('{"key": "value"}')
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(osx.app, ["validate", "json", "valid.json"])
+        result = runner.invoke(osx_app, ["validate", "json", "valid.json"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
         result_data = json.loads(result.output)
         assert result_data["valid"] == True
 
-    def test_validate_json_invalid(self, tmp_path, monkeypatch, capsys):
+    def test_validate_json_invalid(self, tmp_path, monkeypatch):
         """Test validating invalid JSON file."""
         json_file = tmp_path / "invalid.json"
         json_file.write_text("not valid json")
         monkeypatch.chdir(tmp_path)
 
-        result = runner.invoke(osx.app, ["validate", "json", "invalid.json"])
+        result = runner.invoke(osx_app, ["validate", "json", "invalid.json"])
         assert result.exit_code == 1
 
-    def test_validate_skills_present(self, tmp_path, monkeypatch, capsys):
+    def test_validate_skills_present(self, tmp_path, monkeypatch):
         """Test validation passes when all skills exist."""
         monkeypatch.chdir(tmp_path)
         skills_dir = tmp_path / ".opencode/skills"
@@ -596,14 +567,14 @@ class TestValidate:
             skill_path.mkdir()
             (skill_path / "SKILL.md").write_text(f"# {skill}")
 
-        result = runner.invoke(osx.app, ["validate", "skills"])
+        result = runner.invoke(osx_app, ["validate", "skills"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
         result_data = json.loads(result.output)
         assert result_data["valid"] == True
 
-    def test_validate_commands_present(self, tmp_path, monkeypatch, capsys):
+    def test_validate_commands_present(self, tmp_path, monkeypatch):
         """Test validation passes when all commands exist."""
         monkeypatch.chdir(tmp_path)
         commands_dir = tmp_path / ".opencode/commands"
@@ -612,7 +583,7 @@ class TestValidate:
         for phase, cmd_name in osx.PHASE_COMMANDS.items():
             (commands_dir / f"{cmd_name}.md").write_text(f"# {cmd_name}")
 
-        result = runner.invoke(osx.app, ["validate", "commands"])
+        result = runner.invoke(osx_app, ["validate", "commands"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -624,10 +595,8 @@ class TestValidate:
 class TestBaseline:
     """Tests for baseline command."""
 
-    def test_baseline_record_and_get(self, tmp_path, monkeypatch, capsys):
+    def test_baseline_record_and_get(self, tmp_path, monkeypatch):
         """Test recording and getting baseline."""
-        import subprocess
-
         monkeypatch.chdir(tmp_path)
         subprocess.run(["git", "init", "-q"], check=True)
         subprocess.run(["git", "config", "user.email", "test@test.com"], check=True)
@@ -636,7 +605,7 @@ class TestBaseline:
         subprocess.run(["git", "add", "README.md"], check=True)
         subprocess.run(["git", "commit", "-q", "-m", "Initial"], check=True)
 
-        result = runner.invoke(osx.app, ["baseline", "record"])
+        result = runner.invoke(osx_app, ["baseline", "record"])
         assert result.exit_code == 0, (
             f"Output: {result.output}, Exception: {result.exception}"
         )
@@ -644,7 +613,7 @@ class TestBaseline:
         assert result_data["commit"] is not None
         assert result_data["branch"] is not None
 
-        result2 = runner.invoke(osx.app, ["baseline", "get"])
+        result2 = runner.invoke(osx_app, ["baseline", "get"])
         assert result2.exit_code == 0, (
             f"Output: {result2.output}, Exception: {result2.exception}"
         )

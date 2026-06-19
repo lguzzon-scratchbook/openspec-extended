@@ -65,8 +65,8 @@ class TestInstallOpencode:
         assert result.returncode == 0
         assert (test_env / ".opencode" / "skills").is_dir()
         assert (test_env / ".opencode" / "commands").is_dir()
-        assert (test_env / ".opencode" / "scripts").is_dir()
         assert (test_env / ".opencode" / "agents").is_dir()
+        assert not (test_env / ".opencode" / "scripts").exists()
 
     def test_install_opencode_copies_extension_skills(self, test_env):
         """Install opencode copies extension skills."""
@@ -95,22 +95,16 @@ class TestInstallOpencode:
         assert (test_env / ".opencode" / "commands" / "osx-phase1.md").is_file()
         assert (test_env / ".opencode" / "commands" / "osx-phase2.md").is_file()
 
-    def test_install_opencode_copies_scripts_and_executable(self, test_env):
-        """Install opencode copies scripts and makes executable."""
+    def test_install_opencode_does_not_create_scripts_dir(self, test_env):
+        """Install opencode does not create a scripts/ directory.
+
+        State I/O is done via the `openspec-extended osx` CLI subcommand,
+        not a deployed Python script. Agents call the binary directly.
+        """
         result = run_osx(["install", "opencode"], cwd=test_env)
 
         assert result.returncode == 0
-        script_path = test_env / ".opencode" / "scripts" / "osx-orchestrate"
-        assert script_path.is_file()
-        assert (script_path.stat().st_mode & 0o111) != 0
-
-    def test_install_opencode_copies_lib_scripts(self, test_env):
-        """Install opencode copies lib scripts."""
-        result = run_osx(["install", "opencode"], cwd=test_env)
-
-        assert result.returncode == 0
-        assert (test_env / ".opencode" / "scripts" / "lib").is_dir()
-        assert (test_env / ".opencode" / "scripts" / "lib" / "osx").is_file()
+        assert not (test_env / ".opencode" / "scripts").exists()
 
     def test_install_opencode_copies_manifest_with_version(self, test_env):
         """Install opencode copies manifest with version."""
@@ -218,8 +212,8 @@ class TestInstallVsUpdate:
 class TestGitignore:
     """Tests for .gitignore handling."""
 
-    def test_updates_gitignore_when_orchestrate_present(self, test_env):
-        """Updates .gitignore when osx-orchestrate present."""
+    def test_updates_gitignore_when_installing(self, test_env):
+        """Updates .gitignore when openspec-extended resources are installed."""
         run_osx(["install", "opencode"], cwd=test_env)
 
         gitignore = test_env / ".gitignore"
@@ -324,7 +318,7 @@ class TestVersionAwareUpgrade:
 
         assert len(manifest_data["resources"]["agents"]) > 0
         assert (
-            manifest_data["resources"]["scripts"]["osx-orchestrate"]["version"]
+            manifest_data["resources"]["agents"]["osx-analyzer"]["version"]
             is not None
         )
 
@@ -344,11 +338,10 @@ class TestVersionAwareUpgrade:
 class TestValidation:
     """Tests for validation without false positives."""
 
-    def test_validation_no_warnings_for_deployed_scripts_and_lib(self, test_env):
-        """Validation shows no warnings for deployed scripts and lib."""
+    def test_validation_no_warnings(self, test_env):
+        """Validation shows no warnings for any manifest resource."""
         result = run_osx(["install", "opencode"], cwd=test_env)
         assert result.returncode == 0
 
         output = result.stdout + result.stderr
-        assert "Resource 'osx' in manifest but not deployed" not in output
-        assert "Resource 'osx-orchestrate' in manifest but not deployed" not in output
+        assert "in manifest but not deployed" not in output

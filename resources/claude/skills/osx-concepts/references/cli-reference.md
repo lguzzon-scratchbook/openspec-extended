@@ -1,6 +1,6 @@
 # CLI Reference for AI Agents
 
-Complete reference for the three CLI surfaces in OpenSpec-extended. All shapes verified against `@fission-ai/openspec@1.4.1`, `openspec-extended@0.19.x` source, and the deployed `osx` script.
+Complete reference for the three CLI surfaces in OpenSpec-extended. All shapes verified against `@fission-ai/openspec@1.4.1`, `openspec-extended@0.19.x` source, and the `osx` CLI subcommand.
 
 > **Quick rule**: use **`openspec`** to query workflow state, **`openspec-extended`** to drive the lifecycle, and **`osx`** to mutate change state.
 
@@ -324,7 +324,7 @@ openspec-extended install <tool> [--with-core]
 | `--with-core` | Also deploy upstream `osc-*` skills via `openspec init --tools <tool> --force` |
 
 **Behavior**:
-- Copies skills, commands, agents, scripts, and `lib/osx` to `.opencode/` (or `.claude/`)
+- Copies skills, commands, and agents to `.opencode/` (or `.claude/`)
 - Updates `.gitignore` to exclude `state.json`, `complete.json`, `iterations.json`, `decision-log.json`, `verification-report.md`, `reflections.md`, `test-compliance-report.md`, `suggestions.md`, `.openspec-baseline.json`, `.osx-orchestrate-*.log`
 - Renames upstream `opsx-*` / `openspec-*` skills and commands to `osc-*` (replaces `/opsx-` and `/opsx:` with `/osc-` in command file content too)
 - Validates that all manifest resources are deployed; warns on missing
@@ -379,13 +379,13 @@ openspec-extended orchestrate --list
 
 ## C. `osx` (change state tool)
 
-The `osx` tool is the change-management library exposed as a CLI for agent use. It lives at `.opencode/scripts/lib/osx` (or `.claude/scripts/lib/osx`) after install, and is the same Python source as `source/lib/osx.py`.
+The `osx` tool is the change-management library exposed as a CLI subcommand. The library lives in `source/lib/osx.py`; the CLI wrapper lives in `source/osx_cli.py`.
 
 ```bash
-osx <domain> <action> [args]
+openspec-extended osx <domain> <action> [args]
 ```
 
-The `openspec-extended` binary does **not** mount `osx` as a subcommand. Call it directly via the deployed script.
+The `openspec-extended` binary mounts `osx` as a subcommand. No deployed script is needed.
 
 **Conventions**:
 - Output is JSON to stdout

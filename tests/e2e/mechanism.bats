@@ -104,3 +104,60 @@ teardown() {
 
     rm -rf "$fresh_dir"
 }
+
+# ========== osx subcommand surface ==========
+#
+# Round-trip the osx subcommand (the 10-domain CLI surface from
+# source/osx_cli.py) against the built binary. Confirms the
+# subcommand is mounted, every domain is reachable from --help,
+# and the JSON output shapes match what osx.py documents.
+
+@test "mechanism: --help lists osx subcommand alongside orchestrate" {
+    run "$OPENSPEC_BIN" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"osx"* ]]
+    [[ "$output" == *"orchestrate"* ]]
+    [[ "$output" == *"install"* ]]
+}
+
+@test "mechanism: osx --help lists all 10 domains" {
+    run "$OPENSPEC_BIN" osx --help
+    [ "$status" -eq 0 ]
+    for d in baseline ctx git phase state iterations log complete validate instructions; do
+        [[ "$output" == *"$d"* ]]
+    done
+}
+
+@test "mechanism: osx subcommand round-trip against built binary" {
+    setup_minimal_change "smoke-change"
+
+    run "$OPENSPEC_BIN" osx ctx get smoke-change
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.change == "smoke-change"'
+
+    run "$OPENSPEC_BIN" osx state get smoke-change
+    [ "$status" -eq 1 ]
+    echo "$output" | jq -e '.error == "state_not_found"'
+
+    run "$OPENSPEC_BIN" osx phase advance smoke-change
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.phase == "PHASE1"'
+
+    run "$OPENSPEC_BIN" osx state complete smoke-change
+    [ "$status" -eq 0 ]
+
+    run "$OPENSPEC_BIN" osx state get smoke-change
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.phase_complete == true'
+
+    run "$OPENSPEC_BIN" osx log append smoke-change \
+        --phase PHASE1 --iteration 1 --summary "smoke"
+    [ "$status" -eq 0 ]
+
+    run "$OPENSPEC_BIN" osx iterations get smoke-change
+    [ "$status" -eq 0 ]
+
+    run "$OPENSPEC_BIN" osx validate change-dir smoke-change
+    [ "$status" -eq 0 ]
+    echo "$output" | jq -e '.valid == true'
+}

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from source.lib import osx
+from source import osx_cli
 
 
 @pytest.fixture
@@ -72,7 +73,7 @@ class TestGitIntegration:
     def test_baseline_recorded_with_commit_hash(self, test_env, monkeypatch):
         """Baseline is recorded with commit hash."""
         monkeypatch.chdir(test_env)
-        osx.baseline_cmd("record")
+        osx_cli.baseline_cmd("record")
 
         baseline_file = test_env / ".openspec-baseline.json"
         assert baseline_file.is_file()
@@ -86,16 +87,16 @@ class TestGitIntegration:
     def test_baseline_persists_across_state_operations(self, test_env, monkeypatch):
         """Baseline persists across state operations."""
         monkeypatch.chdir(test_env)
-        osx.baseline_cmd("record")
+        osx_cli.baseline_cmd("record")
 
         baseline_file = test_env / ".openspec-baseline.json"
         recorded_commit = json.loads(baseline_file.read_text())["commit"]
 
         setup_change(test_env, "test-change", '{"phase":"PHASE0","iteration":1}')
 
-        osx.phase_cmd("advance", "test-change")
+        osx_cli.phase_cmd("advance", "test-change")
 
-        result = osx.baseline_cmd("get")
+        result = osx_cli.baseline_cmd("get")
 
     def test_git_status_integrates_with_context(self, test_env, monkeypatch):
         """Git status integrates with context."""
@@ -113,12 +114,12 @@ class TestGitIntegration:
         )
 
         monkeypatch.chdir(test_env)
-        result = osx.git_cmd("get", "test-change")
+        result = osx_cli.git_cmd("get", "test-change")
 
     def test_branch_name_captured_correctly(self, test_env, monkeypatch):
         """Branch name is captured correctly."""
         monkeypatch.chdir(test_env)
-        osx.baseline_cmd("record")
+        osx_cli.baseline_cmd("record")
 
         baseline_file = test_env / ".openspec-baseline.json"
         baseline = json.loads(baseline_file.read_text())
@@ -148,7 +149,7 @@ class TestGitIntegration:
         untracked.write_text("new file")
 
         monkeypatch.chdir(test_env)
-        result = osx.git_cmd("get", "test-change")
+        result = osx_cli.git_cmd("get", "test-change")
 
     def test_git_status_reflects_change_directory_modifications(
         self, test_env, monkeypatch
@@ -171,4 +172,4 @@ class TestGitIntegration:
         proposal.write_text(proposal.read_text() + "\nmodified content")
 
         monkeypatch.chdir(test_env)
-        result = osx.git_cmd("get", "test-change")
+        result = osx_cli.git_cmd("get", "test-change")

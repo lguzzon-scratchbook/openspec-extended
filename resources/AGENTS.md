@@ -25,7 +25,6 @@ resources/
 | Slash commands | `/osc-*` | `/osx-*` |
 | Skills | `osc-*` | `osx-*` |
 | Agents | n/a | `osx-*` |
-| Lib scripts | n/a | `osx` |
 
 Core skills (the upstream OpenSpec workflows) live in `openspec-core/` and are not modified locally.
 
@@ -36,8 +35,8 @@ Core skills (the upstream OpenSpec workflows) live in `openspec-core/` and are n
 | Skill | `skills/<name>/SKILL.md` | `name`, `description`, `license` | `osx-concepts` |
 | Agent | `agents/<name>.md` | `description`, `hidden`, `mode`, `temperature`, `permission` | `osx-analyzer` |
 | Command | `commands/<name>.md` | `description` (OpenCode) | `osx-phase0` |
-| Script | `scripts/<name>.py` | n/a | `osx-orchestrate` |
-| Lib | `lib/<name>.py` | n/a | `osx` |
+
+Only skills, agents, and commands are deployed. State I/O is done by calling the binary's `osx` subcommand directly — no scripts or lib files are shipped.
 
 ## Manifest (`manifest.toml`)
 

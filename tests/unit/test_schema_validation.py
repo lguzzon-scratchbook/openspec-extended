@@ -46,9 +46,9 @@ def test_env(tmp_path):
 
 
 def run_osx(env_dir, *args):
-    """Run osx CLI tool via Python module and return result."""
+    """Run osx CLI tool via the main entry point and return result."""
     result = subprocess.run(
-        [sys.executable, "-m", "source.lib.osx"] + list(args),
+        [sys.executable, "-m", "source", "osx"] + list(args),
         cwd=env_dir,
         capture_output=True,
         text=True,

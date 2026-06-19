@@ -7,7 +7,7 @@ agent: osx-analyzer
 
 | Tool | Usage |
 |------|-------|
-| `osx` | `.opencode/scripts/lib/osx <domain> <action> [args]` - unified OpenSpec tool |
+| `osx` | `openspec-extended osx <domain> <action> [args]` - unified OpenSpec tool |
 | Domains: `ctx`, `state`, `iterations`, `log`, `complete`, `validate` |
 
 # PHASE0: Artifact Review
@@ -17,7 +17,7 @@ Change: $1
 ## MANDATORY START
 
 1. Load context:
-  !`.opencode/scripts/lib/osx ctx get "$1"`
+  !`openspec-extended osx ctx get "$1"`
 2. Confirm `phase` is PHASE0
 3. Review `history.iterations_recorded` for previous attempts
 4. Load skills: `osx-concepts` and `osx-workflow` (both reference only)
@@ -73,19 +73,19 @@ IF artifacts were modified during this phase:
 
 Phase complete (clean review):
 ```bash
-.opencode/scripts/lib/osx state complete "$1"
+openspec-extended osx state complete "$1"
 ```
 
 Critical blocker (cannot proceed):
 ```bash
-.opencode/scripts/lib/osx complete set "$1" BLOCKED --blocker-reason "[Describe the blocking issue]"
+openspec-extended osx complete set "$1" BLOCKED --blocker-reason "[Describe the blocking issue]"
 ```
 
 ## DECISION LOG
 
 Append entry:
 ```bash
-.opencode/scripts/lib/osx log append "$1" \
+openspec-extended osx log append "$1" \
   --phase ARTIFACT_REVIEW \
   --iteration N \
   --summary "Brief summary of this iteration" \
@@ -100,7 +100,7 @@ Append entry:
 
 Append entry:
 ```bash
-.opencode/scripts/lib/osx iterations append "$1" \
+openspec-extended osx iterations append "$1" \
   --phase ARTIFACT_REVIEW \
   --iteration N \
   --commit-hash "<hash or null>" \
